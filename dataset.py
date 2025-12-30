@@ -19,6 +19,7 @@ class Datasets(Enum):
     LIBRI_SPEECH_TEST_CLEAN = "LIBRI_SPEECH_TEST_CLEAN"
     LIBRI_SPEECH_TEST_OTHER = "LIBRI_SPEECH_TEST_OTHER"
     MLS = "MLS"
+    PHONE_CALL = "PHONE_CALL"
     TED_LIUM = "TED_LIUM"
     VOX_POPULI = "VOX_POPULI"
 
@@ -33,7 +34,8 @@ class Dataset(object):
                 f"{dataset_name} dataset only supports {[lang.value for lang in self.SUPPORTED_LANGUAGES]} languages"
             )
         if punctuation and not self.SUPPORTS_PUNCTUATION:
-            raise ValueError(f"{dataset_name} dataset does not support punctuation")
+            raise ValueError(
+                f"{dataset_name} dataset does not support punctuation")
         self._language = language
 
     def size(self) -> int:
@@ -69,6 +71,8 @@ class Dataset(object):
             return VoxPopuliDataset(folder, language, punctuation, normalizer)
         elif x is Datasets.FLEURS:
             return FleursDataset(folder, language, punctuation, normalizer)
+        elif x is Datasets.PHONE_CALL:
+            return PhoneCallDataset(folder, language, punctuation, normalizer)
         else:
             raise ValueError(f"Cannot create {cls.__name__} of type `{x}`")
 
@@ -113,7 +117,8 @@ class CommonVoiceDataset(Dataset):
                         continue
 
                     try:
-                        transcript = normalizer.normalize(row["sentence"], raise_error_on_invalid_sentence=True)
+                        transcript = normalizer.normalize(
+                            row["sentence"], raise_error_on_invalid_sentence=True)
                     except RuntimeError:
                         continue
 
@@ -153,17 +158,21 @@ class LibriSpeechTestCleanDataset(Dataset):
                 chapter_folder = os.path.join(speaker_folder, chapter_id)
 
                 with open(
-                    os.path.join(chapter_folder, f"{speaker_id}-{chapter_id}.trans.txt"),
+                    os.path.join(chapter_folder,
+                                 f"{speaker_id}-{chapter_id}.trans.txt"),
                     "r",
                 ) as f:
-                    transcripts = dict(x.split(" ", maxsplit=1) for x in f.readlines())
+                    transcripts = dict(x.split(" ", maxsplit=1)
+                                       for x in f.readlines())
 
                 for x in os.listdir(chapter_folder):
                     if x.endswith(".flac"):
                         transcript = normalizer.normalize(
-                            transcripts[x.replace(".flac", "")], raise_error_on_invalid_sentence=True
+                            transcripts[x.replace(
+                                ".flac", "")], raise_error_on_invalid_sentence=True
                         )
-                        self._data.append((os.path.join(chapter_folder, x), transcript))
+                        self._data.append(
+                            (os.path.join(chapter_folder, x), transcript))
 
     def size(self) -> int:
         return len(self._data)
@@ -183,7 +192,8 @@ class LibriSpeechTestOtherDataset(LibriSpeechTestCleanDataset):
         punctuation: bool,
         normalizer: Normalizer,
     ):
-        super().__init__(folder, language, punctuation, normalizer, Datasets.LIBRI_SPEECH_TEST_OTHER.value)
+        super().__init__(folder, language, punctuation,
+                         normalizer, Datasets.LIBRI_SPEECH_TEST_OTHER.value)
 
     def __str__(self) -> str:
         return "LibriSpeech `test-other`"
@@ -215,8 +225,10 @@ class TEDLIUMDataset(Dataset):
                         continue
 
                     try:
-                        transcript = normalizer.normalize(" ".join(row[6:]).replace(" '", "'"))
-                        full_transcript = f"{full_transcript} {transcript.strip()}".strip()
+                        transcript = normalizer.normalize(
+                            " ".join(row[6:]).replace(" '", "'"))
+                        full_transcript = f"{full_transcript} {transcript.strip()}".strip(
+                        )
                     except RuntimeError:
                         continue
 
@@ -224,7 +236,8 @@ class TEDLIUMDataset(Dataset):
                         start_sec = float(row[3])
                         end_sec = float(row[4])
 
-                        flac_path = sph_path.replace(".sph", f"_{start_sec:.3f}_{end_sec:.3f}.flac")
+                        flac_path = sph_path.replace(
+                            ".sph", f"_{start_sec:.3f}_{end_sec:.3f}.flac")
 
                         if not os.path.exists(flac_path):
                             args = [
@@ -320,7 +333,8 @@ class MLSDataset(Dataset):
                 id, transcript = row.split("\t", 1)
 
                 split_id = id.split("_", 2)
-                opus_path = os.path.join(folder, "test", "audio", split_id[0], split_id[1], f"{id}.opus")
+                opus_path = os.path.join(
+                    folder, "test", "audio", split_id[0], split_id[1], f"{id}.opus")
                 flac_path = opus_path.replace(".opus", ".flac")
                 if not os.path.exists(flac_path):
                     args = [
@@ -339,7 +353,8 @@ class MLSDataset(Dataset):
                     self._data.append(
                         (
                             flac_path,
-                            normalizer.normalize(transcript, raise_error_on_invalid_sentence=True),
+                            normalizer.normalize(
+                                transcript, raise_error_on_invalid_sentence=True),
                         )
                     )
                 except RuntimeError:
@@ -450,7 +465,8 @@ class VoxPopuliDataset(Dataset):
                     data.append(
                         (
                             flac_path,
-                            normalizer.normalize(transcript, raise_error_on_invalid_sentence=True),
+                            normalizer.normalize(
+                                transcript, raise_error_on_invalid_sentence=True),
                         )
                     )
                 except RuntimeError:
@@ -487,10 +503,12 @@ class FleursDataset(Dataset):
 
         self._data = list()
         with open(os.path.join(folder, "test.tsv")) as f:
-            fieldnames = ["id", "filename", "raw_text", "normalized_text", "phonemes", "duration", "gender"]
+            fieldnames = ["id", "filename", "raw_text",
+                          "normalized_text", "phonemes", "duration", "gender"]
             reader = csv.DictReader(f, delimiter="\t", fieldnames=fieldnames)
             for row in reader:
-                wav_path = os.path.join(folder, "audio", "test", row["filename"])
+                wav_path = os.path.join(
+                    folder, "audio", "test", row["filename"])
                 flac_path = wav_path.replace(".wav", ".flac")
                 if not os.path.exists(flac_path):
                     args = [
@@ -528,6 +546,60 @@ class FleursDataset(Dataset):
 
     def __str__(self) -> str:
         return f"Fleurs {self._language.value}"
+
+
+class PhoneCallDataset(Dataset):
+    SUPPORTED_LANGUAGES = [Languages.EN]
+    SUPPORTS_PUNCTUATION = True
+
+    def __init__(self, folder: str, language: Languages, punctuation: bool, normalizer: Normalizer):
+        super().__init__(language, punctuation, Datasets.PHONE_CALL.value)
+
+        import re
+
+        self._data = list()
+        audio_folder = os.path.join(folder, "audio")
+        transcript_folder = os.path.join(folder, "transcripts")
+
+        for audio_file in os.listdir(audio_folder):
+            if audio_file.endswith(".wav"):
+                audio_path = os.path.join(audio_folder, audio_file)
+                transcript_path = os.path.join(
+                    transcript_folder,
+                    audio_file.replace(".wav", ".txt")
+                )
+
+                with open(transcript_path, "r") as f:
+                    lines = f.readlines()
+
+                # Strip speaker labels, remove [unsure:], concatenate
+                parts = []
+                for line in lines:
+                    # Remove speaker labels like [SPEAKER 1:]
+                    text = re.sub(r'\[SPEAKER \d+:\]\s*', '', line)
+                    # Remove [unsure:] tags but keep the text
+                    text = re.sub(r'\[unsure:\]\s*', '', text)
+                    text = text.strip()
+                    if text:
+                        parts.append(text)
+
+                full_transcript = " ".join(parts)
+
+                try:
+                    transcript = normalizer.normalize(
+                        full_transcript, raise_error_on_invalid_sentence=True)
+                    self._data.append((audio_path, transcript))
+                except RuntimeError:
+                    continue
+
+    def size(self) -> int:
+        return len(self._data)
+
+    def get(self, index: int) -> Tuple[str, str]:
+        return self._data[index]
+
+    def __str__(self) -> str:
+        return "Phone Call"
 
 
 __all__ = [
