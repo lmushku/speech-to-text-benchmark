@@ -563,7 +563,25 @@ class PhoneCallDataset(Dataset):
 
         for audio_file in os.listdir(audio_folder):
             if audio_file.endswith(".wav"):
-                audio_path = os.path.join(audio_folder, audio_file)
+                wav_path = os.path.join(audio_folder, audio_file)
+                flac_path = wav_path.replace(".wav", ".flac")
+
+                # Convert WAV to FLAC at 16kHz mono if not already done
+                if not os.path.exists(flac_path):
+                    args = [
+                        "ffmpeg",
+                        "-i",
+                        wav_path,
+                        "-ac",
+                        "1",
+                        "-ar",
+                        "16000",
+                        flac_path,
+                    ]
+                    subprocess.check_output(args)
+                # elif soundfile.read(flac_path)[0].size > 16000 * 60:
+                #     continue
+
                 transcript_path = os.path.join(
                     transcript_folder,
                     audio_file.replace(".wav", ".txt")
@@ -588,7 +606,7 @@ class PhoneCallDataset(Dataset):
                 try:
                     transcript = normalizer.normalize(
                         full_transcript, raise_error_on_invalid_sentence=True)
-                    self._data.append((audio_path, transcript))
+                    self._data.append((flac_path, transcript))
                 except RuntimeError:
                     continue
 
