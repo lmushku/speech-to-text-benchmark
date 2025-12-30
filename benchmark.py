@@ -30,7 +30,8 @@ from normalizer import (
     Normalizer
 )
 
-WorkerResult = namedtuple("WorkerResult", ["metric", "num_errors", "num_tokens", "audio_sec", "process_sec"])
+WorkerResult = namedtuple("WorkerResult", [
+                          "metric", "num_errors", "num_tokens", "audio_sec", "process_sec"])
 RESULTS_FOLDER = os.path.join(os.path.dirname(__file__), "results")
 
 
@@ -45,7 +46,8 @@ def process(
     indices: Sequence[int],
     metric_names: Sequence[Metrics],
 ) -> Sequence[WorkerResult]:
-    engine: Engine = Engine.create(engine_name, language=language, **engine_params)
+    engine: Engine = Engine.create(
+        engine_name, language=language, **engine_params)
     dataset: Dataset = Dataset.create(
         dataset_name,
         folder=dataset_folder,
@@ -53,7 +55,8 @@ def process(
         punctuation=punctuation,
         punctuation_set=punctuation_set,
     )
-    normalizer = Normalizer.create(language=language, keep_punctuation=punctuation, punctuation_set=punctuation_set)
+    normalizer = Normalizer.create(
+        language=language, keep_punctuation=punctuation, punctuation_set=punctuation_set)
 
     metrics = {m: Metric.create(m) for m in metric_names}
     results = {m: {"num_errors": 0, "num_tokens": 0} for m in metric_names}
@@ -68,13 +71,15 @@ def process(
         transcribed_sentence = norm_transcript.strip("\n ").lower()
 
         if language == Languages.EN:
-            ref_sentence = EnglishNormalizer.to_american(EnglishNormalizer.normalize_abbreviations(ref_sentence))
+            ref_sentence = EnglishNormalizer.to_american(
+                EnglishNormalizer.normalize_abbreviations(ref_sentence))
             transcribed_sentence = EnglishNormalizer.to_american(
                 EnglishNormalizer.normalize_abbreviations(transcribed_sentence)
             )
 
         for metric_name, metric in metrics.items():
-            num_errors, num_tokens = metric.calculate(prediction=transcribed_sentence, reference=ref_sentence)
+            num_errors, num_tokens = metric.calculate(
+                prediction=transcribed_sentence, reference=ref_sentence)
             results[metric_name]["num_errors"] += num_errors
             results[metric_name]["num_tokens"] += num_tokens
 
@@ -97,10 +102,13 @@ def process(
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("--engine", required=True, choices=[x.value for x in Engines])
-    parser.add_argument("--dataset", required=True, choices=[x.value for x in Datasets])
+    parser.add_argument("--engine", required=True,
+                        choices=[x.value for x in Engines])
+    parser.add_argument("--dataset", required=True,
+                        choices=[x.value for x in Datasets])
     parser.add_argument("--dataset-folder", required=True)
-    parser.add_argument("--language", required=True, choices=[x.value for x in Languages])
+    parser.add_argument("--language", required=True,
+                        choices=[x.value for x in Languages])
     parser.add_argument("--punctuation", action="store_true")
     parser.add_argument("--punctuation-set", type=str, default=".?")
     parser.add_argument("--streaming-chunk-size-ms", type=int, default=32)
@@ -134,7 +142,8 @@ def main():
         os.environ["AWS_PROFILE"] = args.aws_profile
     elif engine_name in [Engines.AZURE_SPEECH_TO_TEXT, Engines.AZURE_SPEECH_TO_TEXT_REAL_TIME]:
         if args.azure_speech_key is None or args.azure_speech_location is None:
-            raise ValueError("`azure-speech-key` and `azure-speech-location` are required")
+            raise ValueError(
+                "`azure-speech-key` and `azure-speech-location` are required")
         engine_params["azure_speech_key"] = args.azure_speech_key
         engine_params["azure_speech_location"] = args.azure_speech_location
     elif engine_name in [
@@ -150,7 +159,8 @@ def main():
         if args.picovoice_access_key is None:
             raise ValueError("`picovoice-access-key` is required")
         if args.picovoice_model_path is None and args.language != Languages.EN.value:
-            raise ValueError("`picovoice-model-path` is required for non-EN languages")
+            raise ValueError(
+                "`picovoice-model-path` is required for non-EN languages")
         engine_params["access_key"] = args.picovoice_access_key
         engine_params["model_path"] = args.picovoice_model_path
         engine_params["library_path"] = args.picovoice_library_path
@@ -159,14 +169,16 @@ def main():
         if args.picovoice_access_key is None:
             raise ValueError("`picovoice-access-key` is required")
         if args.picovoice_model_path is None and args.language != Languages.EN.value:
-            raise ValueError("`picovoice-model-path` is required for non-EN languages")
+            raise ValueError(
+                "`picovoice-model-path` is required for non-EN languages")
         engine_params["access_key"] = args.picovoice_access_key
         engine_params["model_path"] = args.picovoice_model_path
         engine_params["library_path"] = args.picovoice_library_path
         engine_params["punctuation"] = punctuation
     elif engine_name == Engines.IBM_WATSON_SPEECH_TO_TEXT:
         if args.watson_speech_to_text_api_key is None or args.watson_speech_to_text_url is None:
-            raise ValueError("`watson-speech-to-text-api-key` and `watson-speech-to-text-url` are required")
+            raise ValueError(
+                "`watson-speech-to-text-api-key` and `watson-speech-to-text-url` are required")
         engine_params["watson_speech_to_text_api_key"] = args.watson_speech_to_text_api_key
         engine_params["watson_speech_to_text_url"] = args.watson_speech_to_text_url
 
@@ -187,6 +199,7 @@ def main():
         punctuation_set=punctuation_set,
     )
     indices = list(range(dataset.size()))
+    random.seed(42)
     random.shuffle(indices)
     if args.num_examples is not None:
         indices = indices[:num_examples]
@@ -208,7 +221,7 @@ def main():
                 punctuation_set=punctuation_set,
                 dataset_name=dataset_name,
                 dataset_folder=dataset_folder,
-                indices=indices[i * chunk : (i + 1) * chunk],
+                indices=indices[i * chunk: (i + 1) * chunk],
                 metric_names=metrics,
             )
             futures.append(future)
@@ -223,9 +236,11 @@ def main():
             metric_results[result.metric] = []
         metric_results[result.metric].append(result)
 
-    rtf = sum(x.process_sec for x in results) / sum(x.audio_sec for x in results)
+    rtf = sum(x.process_sec for x in results) / \
+        sum(x.audio_sec for x in results)
 
-    results_log_path = os.path.join(RESULTS_FOLDER, language.value, dataset_name.value, f"{str(engine_name)}.log")
+    results_log_path = os.path.join(
+        RESULTS_FOLDER, language.value, dataset_name.value, f"{str(engine_name)}.log")
     os.makedirs(os.path.dirname(results_log_path), exist_ok=True)
     with open(results_log_path, "w") as f:
         for metric_name, metric_results in metric_results.items():
