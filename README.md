@@ -70,6 +70,15 @@ This benchmark has been developed and tested on `Ubuntu 22.04`.
 pip3 install -r requirements.txt
 ```
 
+Alternatively, using [uv](https://docs.astral.sh/uv/) (recommended):
+
+```console
+uv venv --python 3.9
+uv pip install -r requirements.txt
+```
+
+> **Note:** Python 3.9 is required due to dependency constraints (`llvmlite`/`numba`).
+
 
 ### Benchmark Usage
 
