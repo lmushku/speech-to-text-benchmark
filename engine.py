@@ -39,8 +39,10 @@ from languages import (
     Languages
 )
 
-warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
-warnings.filterwarnings("ignore", message="Performing inference on CPU when CUDA is available")
+warnings.filterwarnings(
+    "ignore", message="FP16 is not supported on CPU; using FP32 instead")
+warnings.filterwarnings(
+    "ignore", message="Performing inference on CPU when CUDA is available")
 
 NUM_THREADS = 1
 os.environ["OMP_NUM_THREADS"] = str(NUM_THREADS)
@@ -72,6 +74,7 @@ class Engines(Enum):
     PICOVOICE_CHEETAH = "PICOVOICE_CHEETAH"
     PICOVOICE_CHEETAH_FAST = "PICOVOICE_CHEETAH_FAST"
     PICOVOICE_LEOPARD = "PICOVOICE_LEOPARD"
+    SONIOX = "SONIOX"
 
 
 StreamingEngines = [
@@ -140,6 +143,8 @@ class Engine(object):
             return PicovoiceLeopardEngine(**kwargs)
         elif x is Engines.IBM_WATSON_SPEECH_TO_TEXT:
             return IBMWatsonSpeechToTextEngine(language=language, **kwargs)
+        elif x is Engines.SONIOX:
+            return SonioxAsyncEngine(language=language, **kwargs)
         else:
             raise ValueError(f"Cannot create {cls.__name__} of type `{x}`")
 
@@ -180,7 +185,8 @@ class StreamingEngine(Engine):
     def load_pcm(self, path: str) -> ByteString:
         pcm, sample_rate = soundfile.read(path, dtype="int16")
         if sample_rate != SAMPLE_RATE:
-            raise ValueError(f"Incorrect sample rate for `{path}`: expected {SAMPLE_RATE} got {sample_rate}")
+            raise ValueError(
+                f"Incorrect sample rate for `{path}`: expected {SAMPLE_RATE} got {sample_rate}")
         return pcm.tobytes()
 
     def get_chunk_size_bytes(self) -> int:
@@ -216,24 +222,30 @@ class AmazonTranscribeEngine(Engine):
 
         self._transcribe_client.start_transcription_job(
             TranscriptionJobName=job_name,
-            Media={"MediaFileUri": f"https://s3-us-west-2.amazonaws.com/{self._s3_bucket}/{s3_object}"},
+            Media={
+                "MediaFileUri": f"https://s3-us-west-2.amazonaws.com/{self._s3_bucket}/{s3_object}"},
             MediaFormat="flac",
             LanguageCode=self._language_code,
         )
 
         while True:
-            status = self._transcribe_client.get_transcription_job(TranscriptionJobName=job_name)
+            status = self._transcribe_client.get_transcription_job(
+                TranscriptionJobName=job_name)
             job_status = status["TranscriptionJob"]["TranscriptionJobStatus"]
             if job_status == "COMPLETED":
                 break
             elif job_status == "FAILED":
-                error = status["TranscriptionJob"].get("FailureReason", "Unknown error")
-                raise RuntimeError(f"Amazon Transcribe job {job_name} failed: {error}")
+                error = status["TranscriptionJob"].get(
+                    "FailureReason", "Unknown error")
+                raise RuntimeError(
+                    f"Amazon Transcribe job {job_name} failed: {error}")
             time.sleep(1)
 
-        content = requests.get(status["TranscriptionJob"]["Transcript"]["TranscriptFileUri"])
+        content = requests.get(
+            status["TranscriptionJob"]["Transcript"]["TranscriptFileUri"])
 
-        res = json.loads(content.content.decode("utf8"))["results"]["transcripts"][0]["transcript"]
+        res = json.loads(content.content.decode("utf8"))[
+            "results"]["transcripts"][0]["transcript"]
 
         with open(cache_path, "w") as f:
             f.write(res)
@@ -251,7 +263,8 @@ class AmazonTranscribeEngine(Engine):
         while response["KeyCount"] > 0:
             self._s3_client.delete_objects(
                 Bucket=self._s3_bucket,
-                Delete={"Objects": [{"Key": obj["Key"]} for obj in response["Contents"]]},
+                Delete={"Objects": [{"Key": obj["Key"]}
+                                    for obj in response["Contents"]]},
             )
             response = self._s3_client.list_objects_v2(Bucket=self._s3_bucket)
 
@@ -302,12 +315,14 @@ class AmazonTranscribeStreamingEngine(StreamingEngine):
             media_encoding="pcm",
         )
 
-        handler = AmazonTranscribeStreamingHandler(stream.output_stream, ignore_punctuation=self._ignore_punctuation)
+        handler = AmazonTranscribeStreamingHandler(
+            stream.output_stream, ignore_punctuation=self._ignore_punctuation)
         send_timings = []
 
         async def write_chunks():
             current_audio_time = 0.0
-            word_timings = [aln[-1] for aln in alignments] if alignments is not None else []
+            word_timings = [aln[-1]
+                            for aln in alignments] if alignments is not None else []
             pcm = self.load_pcm(path)
 
             total_bytes = len(pcm)
@@ -315,8 +330,9 @@ class AmazonTranscribeStreamingEngine(StreamingEngine):
             chunk_size_bytes = self.get_chunk_size_bytes()
 
             while current_byte < total_bytes:
-                chunk = pcm[current_byte : current_byte + chunk_size_bytes]
-                chunk_end_time = current_audio_time + (self._chunk_size_ms / 1000)
+                chunk = pcm[current_byte: current_byte + chunk_size_bytes]
+                chunk_end_time = current_audio_time + \
+                    (self._chunk_size_ms / 1000)
 
                 send_time = time.time()
                 await stream.input_stream.send_audio_event(audio_chunk=chunk)
@@ -373,11 +389,13 @@ class AmazonTranscribeStreamingHandler(TranscriptResultStreamHandler):
                 for alt in result.alternatives:
                     if alt.transcript:
                         if self._ignore_punctuation:
-                            words = alt.transcript.translate(self._punctuation_trans).split()
+                            words = alt.transcript.translate(
+                                self._punctuation_trans).split()
                         else:
                             words = alt.transcript.split()
 
-                        partial_transcript_reset = len(words) < self._last_word_index
+                        partial_transcript_reset = len(
+                            words) < self._last_word_index
                         if partial_transcript_reset:
                             self._last_word_index = 0
 
@@ -388,7 +406,7 @@ class AmazonTranscribeStreamingHandler(TranscriptResultStreamHandler):
                                 self._receive_timings[-1] = current_time
 
                         if len(words) > self._last_word_index:
-                            new_words = words[self._last_word_index :]
+                            new_words = words[self._last_word_index:]
                             for word in new_words:
                                 self._emitted_words.append(word)
                                 self._receive_timings.append(current_time)
@@ -494,7 +512,6 @@ class AzureSpeechToTextRealTimeEngine(StreamingEngine):
         self._azure_speech_key = azure_speech_key
         self._azure_speech_location = azure_speech_location
 
-
     @property
     def is_async(self) -> bool:
         return True
@@ -518,7 +535,8 @@ class AzureSpeechToTextRealTimeEngine(StreamingEngine):
             speech_recognition_language=self._language_code,
         )
 
-        audio_format = speechsdk.audio.AudioStreamFormat(samples_per_second=SAMPLE_RATE)
+        audio_format = speechsdk.audio.AudioStreamFormat(
+            samples_per_second=SAMPLE_RATE)
         push_stream = speechsdk.audio.PushAudioInputStream(audio_format)
         audio_config = speechsdk.audio.AudioConfig(stream=push_stream)
 
@@ -526,7 +544,8 @@ class AzureSpeechToTextRealTimeEngine(StreamingEngine):
             speech_config=speech_config, audio_config=audio_config
         )
 
-        handler = AzureSpeechToTextRealTimeHandler(ignore_punctuation=self._ignore_punctuation)
+        handler = AzureSpeechToTextRealTimeHandler(
+            ignore_punctuation=self._ignore_punctuation)
         speech_recognizer.recognizing.connect(handler.recognizing_cb)
         speech_recognizer.recognized.connect(handler.recognized_cb)
         speech_recognizer.session_stopped.connect(handler.session_stopped_cb)
@@ -536,7 +555,8 @@ class AzureSpeechToTextRealTimeEngine(StreamingEngine):
 
         async def write_chunks() -> None:
             current_audio_time = 0.0
-            word_timings = [aln[-1] for aln in alignments] if alignments is not None else []
+            word_timings = [aln[-1]
+                            for aln in alignments] if alignments is not None else []
             pcm = self.load_pcm(path)
 
             total_bytes = len(pcm)
@@ -544,8 +564,9 @@ class AzureSpeechToTextRealTimeEngine(StreamingEngine):
             chunk_size_bytes = self.get_chunk_size_bytes()
 
             while current_byte < total_bytes:
-                chunk = pcm[current_byte : current_byte + chunk_size_bytes]
-                chunk_end_time = current_audio_time + (self._chunk_size_ms / 1000)
+                chunk = pcm[current_byte: current_byte + chunk_size_bytes]
+                chunk_end_time = current_audio_time + \
+                    (self._chunk_size_ms / 1000)
 
                 send_time = time.time()
                 push_stream.write(chunk)
@@ -616,7 +637,7 @@ class AzureSpeechToTextRealTimeHandler:
                 self._receive_timings[-1] = current_time
 
         if len(words) > self._last_word_index:
-            new_words = words[self._last_word_index :]
+            new_words = words[self._last_word_index:]
             for word in new_words:
                 self._emitted_words.append(word)
                 self._receive_timings.append(current_time)
@@ -675,7 +696,8 @@ class GoogleSpeechToTextEngine(Engine):
 
         response = self._client.recognize(config=self._config, audio=audio)
 
-        res = " ".join(result.alternatives[0].transcript for result in response.results)
+        res = " ".join(
+            result.alternatives[0].transcript for result in response.results)
 
         with open(cache_path, "w") as f:
             f.write(res)
@@ -698,7 +720,8 @@ class GoogleSpeechToTextEngine(Engine):
 class GoogleSpeechToTextEnhancedEngine(GoogleSpeechToTextEngine):
     def __init__(self, language: Languages):
         if language != Languages.EN:
-            raise ValueError("GOOGLE_SPEECH_TO_TEXT_ENHANCED engine only supports EN language")
+            raise ValueError(
+                "GOOGLE_SPEECH_TO_TEXT_ENHANCED engine only supports EN language")
         super().__init__(language=language, cache_extension=".ggle", model="video")
 
     def __str__(self) -> str:
@@ -752,7 +775,8 @@ class GoogleSpeechToTextStreamingEngine(StreamingEngine):
                 res = f.read()
             return res.split(), [], []
 
-        word_timings = [aln[-1] for aln in alignments] if alignments is not None else []
+        word_timings = [aln[-1]
+                        for aln in alignments] if alignments is not None else []
         pcm = self.load_pcm(path)
 
         streamer = GoogleSpeechToTextStreamingAudioGenerator(
@@ -762,12 +786,14 @@ class GoogleSpeechToTextStreamingEngine(StreamingEngine):
             chunk_size_ms=self._chunk_size_ms,
             apply_delay=self._apply_delay,
         )
-        handler = GoogleSpeechToTextStreamingHandler(ignore_punctuation=self._ignore_punctuation)
+        handler = GoogleSpeechToTextStreamingHandler(
+            ignore_punctuation=self._ignore_punctuation)
 
         def request_generator():
             yield from streamer.stream_generator()
 
-        responses = self._client.streaming_recognize(config=self._streaming_config, requests=request_generator())
+        responses = self._client.streaming_recognize(
+            config=self._streaming_config, requests=request_generator())
 
         for response in responses:
             if len(response.results) == 0:
@@ -806,7 +832,8 @@ class GoogleSpeechToTextEnhancedStreamingEngine(GoogleSpeechToTextStreamingEngin
         ignore_punctuation: bool,
     ) -> None:
         if language != Languages.EN:
-            raise ValueError("GOOGLE_SPEECH_TO_TEXT_ENHANCED_STREAMING engine only supports EN language")
+            raise ValueError(
+                "GOOGLE_SPEECH_TO_TEXT_ENHANCED_STREAMING engine only supports EN language")
         super().__init__(
             chunk_size_ms=chunk_size_ms,
             apply_delay=apply_delay,
@@ -844,7 +871,8 @@ class GoogleSpeechToTextStreamingAudioGenerator(object):
         current_audio_time = 0.0
 
         while current_byte < total_bytes and not self._finished:
-            chunk = self._pcm[current_byte : current_byte + self._chunk_size_bytes]
+            chunk = self._pcm[current_byte: current_byte +
+                              self._chunk_size_bytes]
             chunk_end_time = current_audio_time + (self._chunk_size_ms / 1000)
 
             send_time = time.time()
@@ -900,7 +928,7 @@ class GoogleSpeechToTextStreamingHandler(object):
                 self._receive_timings[-1] = current_time
 
         if len(words) > self._last_word_index:
-            new_words = words[self._last_word_index :]
+            new_words = words[self._last_word_index:]
             for word in new_words:
                 self._emitted_words.append(word)
                 self._receive_timings.append(current_time)
@@ -916,9 +944,11 @@ class IBMWatsonSpeechToTextEngine(Engine):
         language: Languages,
     ):
         if language != Languages.EN:
-            raise ValueError("IBM_WATSON_SPEECH_TO_TEXT engine only supports EN language")
+            raise ValueError(
+                "IBM_WATSON_SPEECH_TO_TEXT engine only supports EN language")
 
-        self._service = SpeechToTextV1(authenticator=IAMAuthenticator(watson_speech_to_text_api_key))
+        self._service = SpeechToTextV1(
+            authenticator=IAMAuthenticator(watson_speech_to_text_api_key))
         self._service.set_service_url(watson_speech_to_text_url)
 
     def transcribe(self, path: str) -> str:
@@ -988,7 +1018,8 @@ class Whisper(Engine):
             return res
 
         start_sec = time.time()
-        res = self._model.transcribe(path, language=self._language_code)["text"]
+        res = self._model.transcribe(
+            path, language=self._language_code)["text"]
         self._proc_sec += time.time() - start_sec
 
         with open(cache_path, "w") as f:
@@ -1099,7 +1130,8 @@ class PicovoiceCheetahEngine(StreamingEngine):
         res = ""
         for i in range(audio.size // self._cheetah.frame_length):
             partial, _ = self._cheetah.process(
-                audio[i * self._cheetah.frame_length : (i + 1) * self._cheetah.frame_length]
+                audio[i *
+                      self._cheetah.frame_length: (i + 1) * self._cheetah.frame_length]
             )
             res += partial
         res += self._cheetah.flush()
@@ -1112,15 +1144,18 @@ class PicovoiceCheetahEngine(StreamingEngine):
     ) -> WordLatencyOutputType:
         pcm, sample_rate = soundfile.read(path, dtype="int16")
         if sample_rate != SAMPLE_RATE:
-            raise ValueError(f"Incorrect sample rate for `{path}`: expected {SAMPLE_RATE} got {sample_rate}")
+            raise ValueError(
+                f"Incorrect sample rate for `{path}`: expected {SAMPLE_RATE} got {sample_rate}")
 
-        send_timings = [aln[-1] for aln in alignments] if alignments is not None else []
+        send_timings = [aln[-1]
+                        for aln in alignments] if alignments is not None else []
 
         emitted_words = []
         receive_timings = []
         for i in range(pcm.size // self._cheetah.frame_length):
             partial, _ = self._cheetah.process(
-                pcm[i * self._cheetah.frame_length : (i + 1) * self._cheetah.frame_length]
+                pcm[i *
+                    self._cheetah.frame_length: (i + 1) * self._cheetah.frame_length]
             )
 
             if len(partial) > 0:
@@ -1190,6 +1225,172 @@ class PicovoiceLeopardEngine(Engine):
 
     def __str__(self):
         return "Picovoice Leopard"
+
+
+class SonioxAsyncEngine(Engine):
+    LANGUAGE_TO_SONIOX_CODE = {
+        Languages.EN: "en",
+        Languages.DE: "de",
+        Languages.ES: "es",
+        Languages.FR: "fr",
+        Languages.IT: "it",
+        Languages.PT_PT: "pt",
+        Languages.PT_BR: "pt",
+    }
+
+    API_BASE_URL = "https://api.soniox.com/v1"
+    MODEL = "stt-async-preview"
+    MAX_RETRIES = 5
+    INITIAL_BACKOFF = 2.0
+
+    def __init__(self, soniox_api_key: str, language: Languages):
+        self._api_key = soniox_api_key
+        self._language_code = self.LANGUAGE_TO_SONIOX_CODE[language]
+        self._headers = {
+            "Authorization": f"Bearer {self._api_key}",
+        }
+
+    def _request_with_retry(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Make HTTP request with exponential backoff for rate limits."""
+        backoff = self.INITIAL_BACKOFF
+        for attempt in range(self.MAX_RETRIES):
+            response = requests.request(method, url, **kwargs)
+            if response.ok:
+                return response
+            # Check for rate limit error
+            if response.status_code == 400 or response.status_code == 429:
+                try:
+                    error_data = response.json()
+                    if error_data.get("error_type") == "limit_exceeded":
+                        if attempt < self.MAX_RETRIES - 1:
+                            time.sleep(backoff)
+                            backoff *= 2
+                            continue
+                except (ValueError, KeyError):
+                    pass
+            # For non-rate-limit errors, raise immediately
+            return response
+        return response
+
+    def _upload_file(self, path: str) -> str:
+        """Upload a local audio file and return the file_id."""
+        with open(path, "rb") as f:
+            file_content = f.read()
+        files = {"file": (os.path.basename(path), file_content)}
+        response = self._request_with_retry(
+            "POST",
+            f"{self.API_BASE_URL}/files",
+            headers=self._headers,
+            files=files,
+        )
+        if not response.ok:
+            raise RuntimeError(
+                f"Soniox file upload failed: {response.status_code} - {response.text}")
+        data = response.json()
+        # Handle both possible key names from API
+        file_id = data.get("fileId") or data.get("file_id") or data.get("id")
+        if not file_id:
+            raise RuntimeError(
+                f"Soniox file upload response missing file ID. Response: {data}")
+        return file_id
+
+    def _create_transcription(self, file_id: str) -> str:
+        """Create a transcription job and return the transcription ID."""
+        payload = {
+            "model": self.MODEL,
+            "file_id": file_id,
+            "language_hints": [self._language_code],
+        }
+        response = self._request_with_retry(
+            "POST",
+            f"{self.API_BASE_URL}/transcriptions",
+            headers=self._headers,
+            json=payload,
+        )
+        if not response.ok:
+            raise RuntimeError(
+                f"Soniox create transcription failed: {response.status_code} - {response.text}")
+        data = response.json()
+        transcription_id = data.get("id")
+        if not transcription_id:
+            raise RuntimeError(
+                f"Soniox create transcription response missing ID. Response: {data}")
+        return transcription_id
+
+    def _get_transcription_status(self, transcription_id: str) -> dict:
+        """Get the status of a transcription job."""
+        response = self._request_with_retry(
+            "GET",
+            f"{self.API_BASE_URL}/transcriptions/{transcription_id}",
+            headers=self._headers,
+        )
+        if not response.ok:
+            raise RuntimeError(
+                f"Soniox get status failed: {response.status_code} - {response.text}")
+        return response.json()
+
+    def _get_transcript(self, transcription_id: str) -> str:
+        """Get the transcript text for a completed transcription."""
+        response = self._request_with_retry(
+            "GET",
+            f"{self.API_BASE_URL}/transcriptions/{transcription_id}/transcript",
+            headers=self._headers,
+        )
+        if not response.ok:
+            raise RuntimeError(
+                f"Soniox get transcript failed: {response.status_code} - {response.text}")
+        data = response.json()
+        text = data.get("text", "")
+        return text
+
+    def transcribe(self, path: str) -> str:
+        cache_path = path.replace(".flac", ".snx")
+
+        if os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                res = f.read()
+            return res
+
+        # Upload file
+        file_id = self._upload_file(path)
+
+        # Create transcription job
+        transcription_id = self._create_transcription(file_id)
+
+        # Poll for completion
+        while True:
+            status_response = self._get_transcription_status(transcription_id)
+            status = status_response["status"]
+
+            if status == "completed":
+                break
+            elif status == "error":
+                error_msg = status_response.get(
+                    "error_message", "Unknown error")
+                raise RuntimeError(
+                    f"Soniox transcription {transcription_id} failed: {error_msg}")
+
+            time.sleep(1)
+
+        # Get transcript
+        res = self._get_transcript(transcription_id)
+
+        with open(cache_path, "w") as f:
+            f.write(res)
+
+        return res
+
+    def audio_sec(self) -> float:
+        return -1.0
+
+    def process_sec(self) -> float:
+        return -1.0
+
+    def delete(self) -> None:
+        pass
+
+    def __str__(self) -> str:
+        return "Soniox"
 
 
 __all__ = [

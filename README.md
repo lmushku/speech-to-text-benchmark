@@ -57,6 +57,7 @@ The aggregate size of models (acoustic and language), in MB. We omit this metric
 - [OpenAI Whisper](https://github.com/openai/whisper)
 - [Picovoice Cheetah](https://picovoice.ai/)
 - [Picovoice Leopard](https://picovoice.ai/)
+- [Soniox](https://soniox.com/)
 
 ## Usage
 
@@ -198,6 +199,24 @@ python3 benchmark.py \
 --dataset-folder ${DATASET_FOLDER} \
 --picovoice-access-key ${PICOVOICE_ACCESS_KEY} \
 --picovoice-model-path ${PICOVOICE_MODEL_PATH}
+```
+
+#### Soniox Instructions
+
+Replace `${DATASET}` with one of the supported datasets, `${DATASET_FOLDER}` with path to dataset, `${LANGUAGE}` with the target language,
+and `${SONIOX_API_KEY}` with your API key obtained from [Soniox Console](https://console.soniox.com/).
+
+**Note:** Soniox has API rate limits (25 concurrent transcription requests, 100 max pending transcriptions). 
+Use `--num-workers 1` to avoid hitting rate limits.
+
+```console
+python3 benchmark.py \
+--engine SONIOX \
+--dataset ${DATASET} \
+--language ${LANGUAGE} \
+--dataset-folder ${DATASET_FOLDER} \
+--soniox-api-key ${SONIOX_API_KEY} \
+--num-workers 1
 ```
 
 ### Latency Benchmark Usage

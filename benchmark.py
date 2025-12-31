@@ -122,6 +122,7 @@ def main():
     parser.add_argument("--picovoice-library-path", default=None)
     parser.add_argument("--watson-speech-to-text-api-key")
     parser.add_argument("--watson-speech-to-text-url")
+    parser.add_argument("--soniox-api-key")
     parser.add_argument("--num-examples", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=os.cpu_count())
     args = parser.parse_args()
@@ -181,6 +182,10 @@ def main():
                 "`watson-speech-to-text-api-key` and `watson-speech-to-text-url` are required")
         engine_params["watson_speech_to_text_api_key"] = args.watson_speech_to_text_api_key
         engine_params["watson_speech_to_text_url"] = args.watson_speech_to_text_url
+    elif engine_name == Engines.SONIOX:
+        if args.soniox_api_key is None:
+            raise ValueError("`soniox-api-key` is required")
+        engine_params["soniox_api_key"] = args.soniox_api_key
 
     if engine_name in StreamingEngines and engine_name not in [Engines.PICOVOICE_CHEETAH, Engines.PICOVOICE_CHEETAH_FAST]:
         engine_params["chunk_size_ms"] = args.streaming_chunk_size_ms
