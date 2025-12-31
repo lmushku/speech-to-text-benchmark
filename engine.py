@@ -33,6 +33,7 @@ from azure.cognitiveservices.speech import SpeechRecognitionEventArgs
 from google.cloud import speech
 from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
 from ibm_watson import SpeechToTextV1
+from deepgram import DeepgramClient
 
 from languages import (
     LANGUAGE_TO_CODE,
@@ -75,6 +76,7 @@ class Engines(Enum):
     PICOVOICE_CHEETAH_FAST = "PICOVOICE_CHEETAH_FAST"
     PICOVOICE_LEOPARD = "PICOVOICE_LEOPARD"
     SONIOX = "SONIOX"
+    DEEPGRAM = "DEEPGRAM"
 
 
 StreamingEngines = [
@@ -145,6 +147,8 @@ class Engine(object):
             return IBMWatsonSpeechToTextEngine(language=language, **kwargs)
         elif x is Engines.SONIOX:
             return SonioxAsyncEngine(language=language, **kwargs)
+        elif x is Engines.DEEPGRAM:
+            return DeepgramEngine(language=language, **kwargs)
         else:
             raise ValueError(f"Cannot create {cls.__name__} of type `{x}`")
 
@@ -1391,6 +1395,62 @@ class SonioxAsyncEngine(Engine):
 
     def __str__(self) -> str:
         return "Soniox"
+
+
+class DeepgramEngine(Engine):
+    LANGUAGE_TO_DEEPGRAM_CODE = {
+        Languages.EN: "en",
+        Languages.DE: "de",
+        Languages.ES: "es",
+        Languages.FR: "fr",
+        Languages.IT: "it",
+        Languages.PT_PT: "pt",
+        Languages.PT_BR: "pt",
+    }
+
+    def __init__(self, deepgram_api_key: str, language: Languages):
+        self._client = DeepgramClient(api_key=deepgram_api_key)
+        self._language_code = self.LANGUAGE_TO_DEEPGRAM_CODE[language]
+
+    def transcribe(self, path: str) -> str:
+        cache_path = path.replace(".flac", ".dg")
+
+        if os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                res = f.read()
+            return res
+
+        with open(path, "rb") as audio_file:
+            audio_data = audio_file.read()
+
+        response = self._client.listen.v1.media.transcribe_file(
+            request=audio_data,
+            model="nova-3",
+            language=self._language_code,
+        )
+
+        res = ""
+        if response and response.results and response.results.channels:
+            alternatives = response.results.channels[0].alternatives
+            if alternatives:
+                res = alternatives[0].transcript
+
+        with open(cache_path, "w") as f:
+            f.write(res)
+
+        return res
+
+    def audio_sec(self) -> float:
+        return -1.0
+
+    def process_sec(self) -> float:
+        return -1.0
+
+    def delete(self) -> None:
+        pass
+
+    def __str__(self) -> str:
+        return "Deepgram"
 
 
 __all__ = [

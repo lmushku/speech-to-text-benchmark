@@ -123,6 +123,7 @@ def main():
     parser.add_argument("--watson-speech-to-text-api-key")
     parser.add_argument("--watson-speech-to-text-url")
     parser.add_argument("--soniox-api-key")
+    parser.add_argument("--deepgram-api-key")
     parser.add_argument("--num-examples", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=os.cpu_count())
     args = parser.parse_args()
@@ -186,6 +187,10 @@ def main():
         if args.soniox_api_key is None:
             raise ValueError("`soniox-api-key` is required")
         engine_params["soniox_api_key"] = args.soniox_api_key
+    elif engine_name == Engines.DEEPGRAM:
+        if args.deepgram_api_key is None:
+            raise ValueError("`deepgram-api-key` is required")
+        engine_params["deepgram_api_key"] = args.deepgram_api_key
 
     if engine_name in StreamingEngines and engine_name not in [Engines.PICOVOICE_CHEETAH, Engines.PICOVOICE_CHEETAH_FAST]:
         engine_params["chunk_size_ms"] = args.streaming_chunk_size_ms
