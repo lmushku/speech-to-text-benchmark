@@ -4,3 +4,4 @@ res/deepspeech/
 res/LibriSpeech
 venv
 datasets/
+.env
