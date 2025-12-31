@@ -77,6 +77,7 @@ class Engines(Enum):
     PICOVOICE_LEOPARD = "PICOVOICE_LEOPARD"
     SONIOX = "SONIOX"
     DEEPGRAM = "DEEPGRAM"
+    ELEVENLABS = "ELEVENLABS"
 
 
 StreamingEngines = [
@@ -149,6 +150,8 @@ class Engine(object):
             return SonioxAsyncEngine(language=language, **kwargs)
         elif x is Engines.DEEPGRAM:
             return DeepgramEngine(language=language, **kwargs)
+        elif x is Engines.ELEVENLABS:
+            return ElevenLabsEngine(language=language, **kwargs)
         else:
             raise ValueError(f"Cannot create {cls.__name__} of type `{x}`")
 
@@ -1451,6 +1454,65 @@ class DeepgramEngine(Engine):
 
     def __str__(self) -> str:
         return "Deepgram"
+
+
+class ElevenLabsEngine(Engine):
+    LANGUAGE_TO_ELEVENLABS_CODE = {
+        Languages.EN: "en",
+        Languages.DE: "de",
+        Languages.ES: "es",
+        Languages.FR: "fr",
+        Languages.IT: "it",
+        Languages.PT_PT: "pt",
+        Languages.PT_BR: "pt",
+    }
+
+    API_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+    MODEL = "scribe_v1"
+
+    def __init__(self, elevenlabs_api_key: str, language: Languages):
+        self._api_key = elevenlabs_api_key
+        self._language_code = self.LANGUAGE_TO_ELEVENLABS_CODE[language]
+
+    def transcribe(self, path: str) -> str:
+        cache_path = path.replace(".flac", ".el")
+
+        if os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                return f.read()
+
+        with open(path, "rb") as audio_file:
+            files = {"file": (os.path.basename(path), audio_file)}
+            data = {
+                "model_id": self.MODEL,
+                "language_code": self._language_code,
+            }
+            headers = {"xi-api-key": self._api_key}
+            response = requests.post(
+                self.API_URL, headers=headers, files=files, data=data)
+
+        if not response.ok:
+            raise RuntimeError(
+                f"ElevenLabs transcription failed: {response.status_code} - {response.text}")
+
+        res = response.json().get("text", "")
+
+        with open(cache_path, "w") as f:
+            f.write(res)
+
+        return res
+
+    def audio_sec(self) -> float:
+        return -1.0
+
+    def process_sec(self) -> float:
+        return -1.0
+
+    def delete(self) -> None:
+        pass
+
+    def __str__(self) -> str:
+        return "ElevenLabs"
 
 
 __all__ = [
