@@ -16,3 +16,4 @@ pvleopard==2.0.1
 pytube
 requests
 soundfile
+deepgram-sdk
