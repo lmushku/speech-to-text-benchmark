@@ -1007,7 +1007,13 @@ class Whisper(Engine):
     }
 
     def __init__(self, cache_extension: str, model: str, language: Languages):
-        self._model = whisper.load_model(model, device="cpu")
+        # Use MPS if available (macOS Apple Silicon), otherwise CPU
+        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+            self._device = "mps"
+        else:
+            self._device = "cpu"
+        print(f"Using {self._device} device")
+        self._model = whisper.load_model(model, device=self._device)
         self._cache_extension = cache_extension
         self._language_code = self.LANGUAGE_TO_WHISPER_CODE[language]
         self._audio_sec = 0.0
@@ -1025,8 +1031,9 @@ class Whisper(Engine):
             return res
 
         start_sec = time.time()
+        # MPS requires fp16=False to avoid NaN errors
         res = self._model.transcribe(
-            path, language=self._language_code)["text"]
+            path, language=self._language_code, fp16=(self._device != "mps"))["text"]
         self._proc_sec += time.time() - start_sec
 
         with open(cache_path, "w") as f:
