@@ -34,6 +34,7 @@ from google.cloud import speech
 from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
 from ibm_watson import SpeechToTextV1
 from deepgram import DeepgramClient
+from deepgram.core.api_error import ApiError as DeepgramApiError
 
 from languages import (
     LANGUAGE_TO_CODE,
