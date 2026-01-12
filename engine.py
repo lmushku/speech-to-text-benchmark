@@ -1392,7 +1392,7 @@ class SonioxAsyncEngine(Engine):
     def transcribe(self, path: str) -> str:
         cache_path = path.replace(".flac", ".snx")
 
-        if os.path.exists(cache_path):
+        if not self._no_cache and os.path.exists(cache_path):
             with open(cache_path, "r") as f:
                 res = f.read()
             return res
