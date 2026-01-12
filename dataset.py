@@ -74,6 +74,8 @@ class Dataset(object):
             return FleursDataset(folder, language, punctuation, normalizer)
         elif x is Datasets.PHONE_CALL:
             return PhoneCallDataset(folder, language, punctuation, normalizer)
+        elif x is Datasets.CHINESE:
+            return ChineseDataset(folder, language, punctuation, normalizer)
         else:
             raise ValueError(f"Cannot create {cls.__name__} of type `{x}`")
 
@@ -619,6 +621,61 @@ class PhoneCallDataset(Dataset):
 
     def __str__(self) -> str:
         return "Phone Call"
+
+
+class ChineseDataset(Dataset):
+    """
+    Dataset for Chinese (Mandarin) STT benchmarking.
+
+    Expected structure:
+    - folder/audio/ - audio files named {uuid}.flac
+    - folder/transcripts/ - transcript files named {uuid}.txt
+    """
+    SUPPORTED_LANGUAGES = [Languages.ZH]
+    SUPPORTS_PUNCTUATION = False  # Using CER metric instead
+
+    def __init__(
+        self,
+        folder: str,
+        language: Languages,
+        punctuation: bool,
+        normalizer: Normalizer,
+    ):
+        super().__init__(language, punctuation, Datasets.CHINESE.value)
+
+        self._data = []
+        audio_folder = os.path.join(folder, "audio")
+        transcript_folder = os.path.join(folder, "transcripts")
+
+        for audio_file in os.listdir(audio_folder):
+            if audio_file.endswith(".flac"):
+                flac_path = os.path.join(audio_folder, audio_file)
+                transcript_path = os.path.join(
+                    transcript_folder,
+                    audio_file.replace(".flac", ".txt")
+                )
+
+                if not os.path.exists(transcript_path):
+                    continue
+
+                with open(transcript_path, "r", encoding="utf-8") as f:
+                    full_transcript = f.read().strip()
+
+                try:
+                    transcript = normalizer.normalize(
+                        full_transcript, raise_error_on_invalid_sentence=False)
+                    self._data.append((flac_path, transcript))
+                except Exception:
+                    continue
+
+    def size(self) -> int:
+        return len(self._data)
+
+    def get(self, index: int) -> Tuple[str, str]:
+        return self._data[index]
+
+    def __str__(self) -> str:
+        return "Chinese Mandarin"
 
 
 __all__ = [
