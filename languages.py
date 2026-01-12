@@ -9,6 +9,7 @@ class Languages(Enum):
     IT = "IT"
     PT_PT = "PT-PT"
     PT_BR = "PT-BR"
+    ZH = "ZH"
 
 
 LANGUAGE_TO_CODE = {
@@ -19,6 +20,7 @@ LANGUAGE_TO_CODE = {
     Languages.IT: "it-IT",
     Languages.PT_PT: "pt-PT",
     Languages.PT_BR: "pt-BR",
+    Languages.ZH: "zh-CN",
 }
 
 __all__ = [
