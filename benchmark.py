@@ -127,6 +127,8 @@ def main():
     parser.add_argument("--elevenlabs-api-key")
     parser.add_argument("--num-examples", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=os.cpu_count())
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Ignore cached results and regenerate transcriptions")
     args = parser.parse_args()
 
     engine_name = Engines(args.engine)
@@ -139,6 +141,7 @@ def main():
     num_workers = args.num_workers
 
     engine_params = dict()
+    engine_params["no_cache"] = args.no_cache
     if engine_name in [Engines.AMAZON_TRANSCRIBE, Engines.AMAZON_TRANSCRIBE_STREAMING]:
         if args.aws_profile is None or args.aws_location is None:
             raise ValueError("`aws-profile` and `aws-location` is required")
@@ -221,7 +224,13 @@ def main():
 
     chunk = math.ceil(len(indices) / num_workers)
 
-    metrics = [Metrics.PER] if punctuation else [Metrics.WER]
+    # Select appropriate metric based on language
+    if language == Languages.ZH:
+        metrics = [Metrics.CER]
+    elif punctuation:
+        metrics = [Metrics.PER]
+    else:
+        metrics = [Metrics.WER]
 
     print(f"Processing {len(indices)} examples...")
     futures = []

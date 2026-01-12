@@ -92,6 +92,9 @@ StreamingEngines = [
 
 
 class Engine(object):
+    def __init__(self, no_cache: bool = False):
+        self._no_cache = no_cache
+
     def transcribe(self, path: str) -> str:
         raise NotImplementedError()
 
@@ -108,51 +111,51 @@ class Engine(object):
         raise NotImplementedError()
 
     @classmethod
-    def create(cls, x: Engines, language: Languages, **kwargs):
+    def create(cls, x: Engines, language: Languages, no_cache: bool = False, **kwargs):
         if x is Engines.AMAZON_TRANSCRIBE:
-            return AmazonTranscribeEngine(language=language)
+            return AmazonTranscribeEngine(language=language, no_cache=no_cache)
         if x is Engines.AMAZON_TRANSCRIBE_STREAMING:
-            return AmazonTranscribeStreamingEngine(language=language, **kwargs)
+            return AmazonTranscribeStreamingEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.AZURE_SPEECH_TO_TEXT:
-            return AzureSpeechToTextEngine(language=language, **kwargs)
+            return AzureSpeechToTextEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.AZURE_SPEECH_TO_TEXT_REAL_TIME:
-            return AzureSpeechToTextRealTimeEngine(language=language, **kwargs)
+            return AzureSpeechToTextRealTimeEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.GOOGLE_SPEECH_TO_TEXT:
-            return GoogleSpeechToTextEngine(language=language)
+            return GoogleSpeechToTextEngine(language=language, no_cache=no_cache)
         elif x is Engines.GOOGLE_SPEECH_TO_TEXT_ENHANCED:
-            return GoogleSpeechToTextEnhancedEngine(language=language)
+            return GoogleSpeechToTextEnhancedEngine(language=language, no_cache=no_cache)
         elif x is Engines.GOOGLE_SPEECH_TO_TEXT_STREAMING:
-            return GoogleSpeechToTextStreamingEngine(language=language, **kwargs)
+            return GoogleSpeechToTextStreamingEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.GOOGLE_SPEECH_TO_TEXT_ENHANCED_STREAMING:
-            return GoogleSpeechToTextEnhancedStreamingEngine(language=language, **kwargs)
+            return GoogleSpeechToTextEnhancedStreamingEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.WHISPER_TINY:
-            return WhisperTiny(language=language)
+            return WhisperTiny(language=language, no_cache=no_cache)
         elif x is Engines.WHISPER_BASE:
-            return WhisperBase(language=language)
+            return WhisperBase(language=language, no_cache=no_cache)
         elif x is Engines.WHISPER_SMALL:
-            return WhisperSmall(language=language)
+            return WhisperSmall(language=language, no_cache=no_cache)
         elif x is Engines.WHISPER_MEDIUM:
-            return WhisperMedium(language=language)
+            return WhisperMedium(language=language, no_cache=no_cache)
         elif x is Engines.WHISPER_LARGE:
-            return WhisperLarge(language=language)
+            return WhisperLarge(language=language, no_cache=no_cache)
         elif x is Engines.WHISPER_LARGE_V2:
-            return WhisperLargeV2(language=language)
+            return WhisperLargeV2(language=language, no_cache=no_cache)
         elif x is Engines.WHISPER_LARGE_V3:
-            return WhisperLargeV3(language=language)
+            return WhisperLargeV3(language=language, no_cache=no_cache)
         elif x is Engines.PICOVOICE_CHEETAH:
-            return PicovoiceCheetahEngine(**kwargs)
+            return PicovoiceCheetahEngine(no_cache=no_cache, **kwargs)
         elif x is Engines.PICOVOICE_CHEETAH_FAST:
-            return PicovoiceCheetahEngine(**kwargs)
+            return PicovoiceCheetahEngine(no_cache=no_cache, **kwargs)
         elif x is Engines.PICOVOICE_LEOPARD:
-            return PicovoiceLeopardEngine(**kwargs)
+            return PicovoiceLeopardEngine(no_cache=no_cache, **kwargs)
         elif x is Engines.IBM_WATSON_SPEECH_TO_TEXT:
-            return IBMWatsonSpeechToTextEngine(language=language, **kwargs)
+            return IBMWatsonSpeechToTextEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.SONIOX:
-            return SonioxAsyncEngine(language=language, **kwargs)
+            return SonioxAsyncEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.DEEPGRAM:
-            return DeepgramEngine(language=language, **kwargs)
+            return DeepgramEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.ELEVENLABS:
-            return ElevenLabsEngine(language=language, **kwargs)
+            return ElevenLabsEngine(language=language, no_cache=no_cache, **kwargs)
         else:
             raise ValueError(f"Cannot create {cls.__name__} of type `{x}`")
 
@@ -203,7 +206,8 @@ class StreamingEngine(Engine):
 
 
 class AmazonTranscribeEngine(Engine):
-    def __init__(self, language: Languages, aws_location: str = "us-west-2"):
+    def __init__(self, language: Languages, aws_location: str = "us-west-2", no_cache: bool = False):
+        super().__init__(no_cache=no_cache)
         self._language_code = LANGUAGE_TO_CODE[language]
 
         self._s3_client = boto3.client("s3")
@@ -219,7 +223,7 @@ class AmazonTranscribeEngine(Engine):
     def transcribe(self, path: str) -> str:
         cache_path = path.replace(".flac", ".aws")
 
-        if os.path.exists(cache_path):
+        if not self._no_cache and os.path.exists(cache_path):
             with open(cache_path) as f:
                 res = f.read()
             return res
@@ -290,8 +294,9 @@ class AmazonTranscribeStreamingEngine(StreamingEngine):
         apply_delay: bool,
         ignore_punctuation: bool,
         aws_location: str = "us-west-2",
+        no_cache: bool = False,
     ) -> None:
-        super().__init__()
+        super().__init__(no_cache=no_cache)
         self._language_code = LANGUAGE_TO_CODE[language]
         self._chunk_size_ms = chunk_size_ms
         self._apply_delay = apply_delay
@@ -312,7 +317,7 @@ class AmazonTranscribeStreamingEngine(StreamingEngine):
     ) -> WordLatencyOutputType:
         cache_path = path.replace(".flac", ".awsrt")
 
-        if alignments is None and os.path.exists(cache_path):
+        if not self._no_cache and alignments is None and os.path.exists(cache_path):
             with open(cache_path) as f:
                 res = f.read()
             return res.split(), [], []
@@ -428,7 +433,9 @@ class AzureSpeechToTextEngine(Engine):
         azure_speech_key: str,
         azure_speech_location: str,
         language: Languages,
+        no_cache: bool = False,
     ):
+        super().__init__(no_cache=no_cache)
         self._language_code = LANGUAGE_TO_CODE[language]
         self._azure_speech_key = azure_speech_key
         self._azure_speech_location = azure_speech_location
@@ -436,7 +443,7 @@ class AzureSpeechToTextEngine(Engine):
     def transcribe(self, path: str) -> str:
         cache_path = path.replace(".flac", ".ms")
 
-        if os.path.exists(cache_path):
+        if not self._no_cache and os.path.exists(cache_path):
             with open(cache_path, "r") as f:
                 res = f.read()
             return res
@@ -511,8 +518,9 @@ class AzureSpeechToTextRealTimeEngine(StreamingEngine):
         ignore_punctuation: bool,
         azure_speech_key: str,
         azure_speech_location: str,
+        no_cache: bool = False,
     ) -> None:
-        super().__init__()
+        super().__init__(no_cache=no_cache)
         self._language_code = LANGUAGE_TO_CODE[language]
         self._chunk_size_ms = chunk_size_ms
         self._apply_delay = apply_delay
@@ -532,7 +540,7 @@ class AzureSpeechToTextRealTimeEngine(StreamingEngine):
     ) -> WordLatencyOutputType:
         cache_path = path.replace(".flac", ".msrt")
 
-        if alignments is None and os.path.exists(cache_path):
+        if not self._no_cache and alignments is None and os.path.exists(cache_path):
             with open(cache_path, "r") as f:
                 res = f.read()
             return res.split(), [], []
@@ -675,7 +683,9 @@ class GoogleSpeechToTextEngine(Engine):
         language: Languages,
         cache_extension: str = ".ggl",
         model: Optional[str] = None,
+        no_cache: bool = False,
     ):
+        super().__init__(no_cache=no_cache)
         self._language_code = LANGUAGE_TO_CODE[language]
 
         self._client = speech.SpeechClient()
@@ -692,7 +702,7 @@ class GoogleSpeechToTextEngine(Engine):
 
     def transcribe(self, path: str) -> str:
         cache_path = path.replace(".flac", self._cache_extension)
-        if os.path.exists(cache_path):
+        if not self._no_cache and os.path.exists(cache_path):
             with open(cache_path) as f:
                 res = f.read()
             return res
@@ -726,11 +736,12 @@ class GoogleSpeechToTextEngine(Engine):
 
 
 class GoogleSpeechToTextEnhancedEngine(GoogleSpeechToTextEngine):
-    def __init__(self, language: Languages):
+    def __init__(self, language: Languages, no_cache: bool = False):
         if language != Languages.EN:
             raise ValueError(
                 "GOOGLE_SPEECH_TO_TEXT_ENHANCED engine only supports EN language")
-        super().__init__(language=language, cache_extension=".ggle", model="video")
+        super().__init__(language=language, cache_extension=".ggle",
+                         model="video", no_cache=no_cache)
 
     def __str__(self) -> str:
         return "Google Speech-to-Text Enhanced"
@@ -745,8 +756,9 @@ class GoogleSpeechToTextStreamingEngine(StreamingEngine):
         ignore_punctuation: bool,
         cache_extension: str = ".gglrt",
         model: Optional[str] = None,
+        no_cache: bool = False,
     ) -> None:
-        super().__init__()
+        super().__init__(no_cache=no_cache)
         self._language_code = LANGUAGE_TO_CODE[language]
         self._chunk_size_ms = chunk_size_ms
         self._apply_delay = apply_delay
@@ -778,7 +790,7 @@ class GoogleSpeechToTextStreamingEngine(StreamingEngine):
         self, path: str, alignments: Optional[Sequence[Tuple[float, float]]]
     ) -> WordLatencyOutputType:
         cache_path = path.replace(".flac", self._cache_extension)
-        if alignments is None and os.path.exists(cache_path):
+        if not self._no_cache and alignments is None and os.path.exists(cache_path):
             with open(cache_path) as f:
                 res = f.read()
             return res.split(), [], []
@@ -838,6 +850,7 @@ class GoogleSpeechToTextEnhancedStreamingEngine(GoogleSpeechToTextStreamingEngin
         chunk_size_ms: int,
         apply_delay: bool,
         ignore_punctuation: bool,
+        no_cache: bool = False,
     ) -> None:
         if language != Languages.EN:
             raise ValueError(
@@ -849,6 +862,7 @@ class GoogleSpeechToTextEnhancedStreamingEngine(GoogleSpeechToTextStreamingEngin
             language=language,
             cache_extension=".gglert",
             model="video",
+            no_cache=no_cache,
         )
 
     def __str__(self) -> str:
@@ -950,7 +964,9 @@ class IBMWatsonSpeechToTextEngine(Engine):
         watson_speech_to_text_api_key: str,
         watson_speech_to_text_url: str,
         language: Languages,
+        no_cache: bool = False,
     ):
+        super().__init__(no_cache=no_cache)
         if language != Languages.EN:
             raise ValueError(
                 "IBM_WATSON_SPEECH_TO_TEXT engine only supports EN language")
@@ -961,7 +977,7 @@ class IBMWatsonSpeechToTextEngine(Engine):
 
     def transcribe(self, path: str) -> str:
         cache_path = path.replace(".flac", ".ibm")
-        if os.path.exists(cache_path):
+        if not self._no_cache and os.path.exists(cache_path):
             with open(cache_path, "r") as f:
                 res = f.read()
             return res
@@ -1005,9 +1021,11 @@ class Whisper(Engine):
         Languages.IT: "it",
         Languages.PT_PT: "pt",
         Languages.PT_BR: "pt",
+        Languages.ZH: "zh",
     }
 
-    def __init__(self, cache_extension: str, model: str, language: Languages):
+    def __init__(self, cache_extension: str, model: str, language: Languages, no_cache: bool = False):
+        super().__init__(no_cache=no_cache)
         # Use MPS if available (macOS Apple Silicon), otherwise CPU
         if torch.backends.mps.is_available() and torch.backends.mps.is_built():
             self._device = "mps"
@@ -1026,7 +1044,7 @@ class Whisper(Engine):
         self._audio_sec += audio.size / sample_rate
 
         cache_path = path.replace(".flac", self._cache_extension)
-        if os.path.exists(cache_path):
+        if not self._no_cache and os.path.exists(cache_path):
             with open(cache_path) as f:
                 res = f.read()
             return res
@@ -1056,60 +1074,67 @@ class Whisper(Engine):
 
 
 class WhisperTiny(Whisper):
-    def __init__(self, language: Languages):
+    def __init__(self, language: Languages, no_cache: bool = False):
         model = "tiny.en" if language == Languages.EN else "tiny"
-        super().__init__(cache_extension=".wspt", model=model, language=language)
+        super().__init__(cache_extension=".wspt", model=model,
+                         language=language, no_cache=no_cache)
 
     def __str__(self) -> str:
         return "Whisper Tiny"
 
 
 class WhisperBase(Whisper):
-    def __init__(self, language: Languages):
+    def __init__(self, language: Languages, no_cache: bool = False):
         model = "base.en" if language == Languages.EN else "base"
-        super().__init__(cache_extension=".wspb", model=model, language=language)
+        super().__init__(cache_extension=".wspb", model=model,
+                         language=language, no_cache=no_cache)
 
     def __str__(self) -> str:
         return "Whisper Base"
 
 
 class WhisperSmall(Whisper):
-    def __init__(self, language: Languages):
+    def __init__(self, language: Languages, no_cache: bool = False):
         model = "small.en" if language == Languages.EN else "small"
-        super().__init__(cache_extension=".wsps", model=model, language=language)
+        super().__init__(cache_extension=".wsps", model=model,
+                         language=language, no_cache=no_cache)
 
     def __str__(self) -> str:
         return "Whisper Small"
 
 
 class WhisperMedium(Whisper):
-    def __init__(self, language: Languages):
+    def __init__(self, language: Languages, no_cache: bool = False):
         model = "medium.en" if language == Languages.EN else "medium"
-        super().__init__(cache_extension=".wspm", model=model, language=language)
+        super().__init__(cache_extension=".wspm", model=model,
+                         language=language, no_cache=no_cache)
 
     def __str__(self) -> str:
         return "Whisper Medium"
 
 
 class WhisperLarge(Whisper):
-    def __init__(self, language: Languages):
-        super().__init__(cache_extension=".wspl", model="large-v1", language=language)
+    def __init__(self, language: Languages, no_cache: bool = False):
+        super().__init__(cache_extension=".wspl", model="large-v1",
+                         language=language, no_cache=no_cache)
 
     def __str__(self) -> str:
         return "Whisper Large-v1"
 
 
 class WhisperLargeV2(Whisper):
-    def __init__(self, language: Languages):
-        super().__init__(cache_extension=".wspl2", model="large-v2", language=language)
+    def __init__(self, language: Languages, no_cache: bool = False):
+        super().__init__(cache_extension=".wspl2", model="large-v2",
+                         language=language, no_cache=no_cache)
 
     def __str__(self) -> str:
         return "Whisper Large-v2"
 
 
 class WhisperLargeV3(Whisper):
-    def __init__(self, language: Languages):
-        super().__init__(cache_extension=".wspl3", model="large-v3", language=language)
+    def __init__(self, language: Languages, no_cache: bool = False):
+        super().__init__(cache_extension=".wspl3", model="large-v3",
+                         language=language, no_cache=no_cache)
 
     def __str__(self) -> str:
         return "Whisper Large-v3"
@@ -1122,7 +1147,9 @@ class PicovoiceCheetahEngine(StreamingEngine):
         model_path: Optional[str],
         library_path: Optional[str],
         punctuation: bool = False,
+        no_cache: bool = False,
     ):
+        super().__init__(no_cache=no_cache)
         self._cheetah = pvcheetah.create(
             access_key=access_key,
             model_path=model_path,
@@ -1208,7 +1235,9 @@ class PicovoiceLeopardEngine(Engine):
         model_path: Optional[str],
         library_path: Optional[str],
         punctuation: bool = False,
+        no_cache: bool = False,
     ):
+        super().__init__(no_cache=no_cache)
         self._leopard = pvleopard.create(
             access_key=access_key,
             model_path=model_path,
@@ -1251,6 +1280,7 @@ class SonioxAsyncEngine(Engine):
         Languages.IT: "it",
         Languages.PT_PT: "pt",
         Languages.PT_BR: "pt",
+        Languages.ZH: "zh",
     }
 
     API_BASE_URL = "https://api.soniox.com/v1"
@@ -1258,7 +1288,8 @@ class SonioxAsyncEngine(Engine):
     MAX_RETRIES = 5
     INITIAL_BACKOFF = 2.0
 
-    def __init__(self, soniox_api_key: str, language: Languages):
+    def __init__(self, soniox_api_key: str, language: Languages, no_cache: bool = False):
+        super().__init__(no_cache=no_cache)
         self._api_key = soniox_api_key
         self._language_code = self.LANGUAGE_TO_SONIOX_CODE[language]
         self._headers = {
@@ -1314,7 +1345,7 @@ class SonioxAsyncEngine(Engine):
         payload = {
             "model": self.MODEL,
             "file_id": file_id,
-            "language_hints": [self._language_code],
+            "language_hints": [self._language_code, "EN"],
         }
         response = self._request_with_retry(
             "POST",
@@ -1417,11 +1448,14 @@ class DeepgramEngine(Engine):
         Languages.IT: "it",
         Languages.PT_PT: "pt",
         Languages.PT_BR: "pt",
+        Languages.ZH: "zh",
     }
 
     def __init__(self, deepgram_api_key: str, language: Languages):
         self._client = DeepgramClient(api_key=deepgram_api_key)
         self._language_code = self.LANGUAGE_TO_DEEPGRAM_CODE[language]
+        # nova-3 doesn't support Chinese yet, use nova-2 for Chinese
+        self._model = "nova-2" if language == Languages.ZH else "nova-3"
 
     def transcribe(self, path: str) -> str:
         cache_path = path.replace(".flac", ".dg")
@@ -1434,11 +1468,15 @@ class DeepgramEngine(Engine):
         with open(path, "rb") as audio_file:
             audio_data = audio_file.read()
 
-        response = self._client.listen.v1.media.transcribe_file(
-            request=audio_data,
-            model="nova-3",
-            language=self._language_code,
-        )
+        try:
+            response = self._client.listen.v1.media.transcribe_file(
+                request=audio_data,
+                model=self._model,
+                language=self._language_code,
+            )
+        except DeepgramApiError as e:
+            # Re-raise as RuntimeError so it can be pickled across process boundaries
+            raise RuntimeError(f"Deepgram API error: {e}") from None
 
         res = ""
         if response and response.results and response.results.channels:
@@ -1473,6 +1511,7 @@ class ElevenLabsEngine(Engine):
         Languages.IT: "it",
         Languages.PT_PT: "pt",
         Languages.PT_BR: "pt",
+        Languages.ZH: "zho",
     }
 
     API_URL = "https://api.elevenlabs.io/v1/speech-to-text"
