@@ -22,6 +22,7 @@ class Datasets(Enum):
     PHONE_CALL = "PHONE_CALL"
     TED_LIUM = "TED_LIUM"
     VOX_POPULI = "VOX_POPULI"
+    CHINESE = "CHINESE"
 
 
 class Dataset(object):
@@ -49,7 +50,7 @@ class Dataset(object):
 
     @classmethod
     def create(
-        cls, x: Datasets, folder: str, language: Languages, punctuation: bool, punctuation_set: str
+        cls, x: Datasets, folder: str, language: Languages, punctuation: bool, punctuation_set: str,
     ):
         normalizer = Normalizer.create(
             language=language,
