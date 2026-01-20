@@ -204,6 +204,9 @@ def main():
         if args.dashscope_api_key is None:
             raise ValueError("`dashscope-api-key` is required")
         engine_params["dashscope_api_key"] = args.dashscope_api_key
+    elif engine_name == Engines.IFLYREC:
+        # Credentials are loaded from .env file via dotenv in the engine class
+        pass
 
     if engine_name in StreamingEngines and engine_name not in [Engines.PICOVOICE_CHEETAH, Engines.PICOVOICE_CHEETAH_FAST]:
         engine_params["chunk_size_ms"] = args.streaming_chunk_size_ms
