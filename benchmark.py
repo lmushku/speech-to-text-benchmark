@@ -125,6 +125,7 @@ def main():
     parser.add_argument("--soniox-api-key")
     parser.add_argument("--deepgram-api-key")
     parser.add_argument("--elevenlabs-api-key")
+    parser.add_argument("--dashscope-api-key")
     parser.add_argument("--num-examples", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=os.cpu_count())
     parser.add_argument("--no-cache", action="store_true",
@@ -199,6 +200,10 @@ def main():
         if args.elevenlabs_api_key is None:
             raise ValueError("`elevenlabs-api-key` is required")
         engine_params["elevenlabs_api_key"] = args.elevenlabs_api_key
+    elif engine_name == Engines.DASHSCOPE:
+        if args.dashscope_api_key is None:
+            raise ValueError("`dashscope-api-key` is required")
+        engine_params["dashscope_api_key"] = args.dashscope_api_key
 
     if engine_name in StreamingEngines and engine_name not in [Engines.PICOVOICE_CHEETAH, Engines.PICOVOICE_CHEETAH_FAST]:
         engine_params["chunk_size_ms"] = args.streaming_chunk_size_ms
