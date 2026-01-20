@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import time
@@ -33,6 +34,7 @@ from azure.cognitiveservices.speech import SpeechRecognitionEventArgs
 from google.cloud import speech
 from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
 from ibm_watson import SpeechToTextV1
+import dashscope
 from deepgram import DeepgramClient
 from deepgram.core.api_error import ApiError as DeepgramApiError
 
@@ -79,6 +81,7 @@ class Engines(Enum):
     SONIOX = "SONIOX"
     DEEPGRAM = "DEEPGRAM"
     ELEVENLABS = "ELEVENLABS"
+    DASHSCOPE = "DASHSCOPE"
 
 
 StreamingEngines = [
@@ -156,6 +159,8 @@ class Engine(object):
             return DeepgramEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.ELEVENLABS:
             return ElevenLabsEngine(language=language, no_cache=no_cache, **kwargs)
+        elif x is Engines.DASHSCOPE:
+            return DashscopeEngine(language=language, no_cache=no_cache, **kwargs)
         else:
             raise ValueError(f"Cannot create {cls.__name__} of type `{x}`")
 
@@ -1345,7 +1350,7 @@ class SonioxAsyncEngine(Engine):
         payload = {
             "model": self.MODEL,
             "file_id": file_id,
-            "language_hints": [self._language_code, "EN"],
+            "language_hints": [self._language_code, "en"],
         }
         response = self._request_with_retry(
             "POST",
@@ -1451,7 +1456,8 @@ class DeepgramEngine(Engine):
         Languages.ZH: "zh",
     }
 
-    def __init__(self, deepgram_api_key: str, language: Languages):
+    def __init__(self, deepgram_api_key: str, language: Languages, no_cache: bool = False):
+        super().__init__(no_cache=no_cache)
         self._client = DeepgramClient(api_key=deepgram_api_key)
         self._language_code = self.LANGUAGE_TO_DEEPGRAM_CODE[language]
         # nova-3 doesn't support Chinese yet, use nova-2 for Chinese
@@ -1460,7 +1466,7 @@ class DeepgramEngine(Engine):
     def transcribe(self, path: str) -> str:
         cache_path = path.replace(".flac", ".dg")
 
-        if os.path.exists(cache_path):
+        if not self._no_cache and os.path.exists(cache_path):
             with open(cache_path, "r") as f:
                 res = f.read()
             return res
@@ -1560,6 +1566,77 @@ class ElevenLabsEngine(Engine):
 
     def __str__(self) -> str:
         return "ElevenLabs"
+
+
+class DashscopeEngine(Engine):
+    LANGUAGE_TO_DASHSCOPE_CODE = {
+        Languages.EN: "en",
+        Languages.DE: "de",
+        Languages.ES: "es",
+        Languages.FR: "fr",
+        Languages.IT: "it",
+        Languages.PT_PT: "pt",
+        Languages.PT_BR: "pt",
+        Languages.ZH: "zh",
+    }
+
+    def __init__(self, dashscope_api_key: str, language: Languages, no_cache: bool = False):
+        super().__init__(no_cache)
+        self._api_key = dashscope_api_key
+        self._language_code = self.LANGUAGE_TO_DASHSCOPE_CODE[language]
+
+    def transcribe(self, path: str) -> str:
+        cache_path = path.replace(".flac", ".ds")
+
+        if not self._no_cache and os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                return f.read()
+
+        # Read audio file and encode as base64
+        with open(path, "rb") as f:
+            audio_b64 = base64.b64encode(f.read()).decode()
+
+        # Create data URI in the format the API expects
+        data_uri = f"data:audio/flac;base64,{audio_b64}"
+
+        # Set international API endpoint (use dashscope.aliyuncs.com for China region)
+        dashscope.base_http_api_url = "https://dashscope-intl.aliyuncs.com/api/v1"
+
+        response = dashscope.MultiModalConversation.call(
+            api_key=self._api_key,
+            model="qwen3-asr-flash",
+            messages=[
+                {"role": "system", "content": [{"text": ""}]},
+                {"role": "user", "content": [{"audio": data_uri}]}
+            ],
+            result_format="message",
+            asr_options={
+                "language": self._language_code
+            }
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Dashscope transcription failed: {response.status_code} - {response.message}")
+
+        res = response["output"]["choices"][0]["message"]["content"][0]["text"]
+
+        with open(cache_path, "w") as f:
+            f.write(res)
+
+        return res
+
+    def audio_sec(self) -> float:
+        return -1.0
+
+    def process_sec(self) -> float:
+        return -1.0
+
+    def delete(self) -> None:
+        pass
+
+    def __str__(self) -> str:
+        return "Dashscope"
 
 
 __all__ = [
