@@ -19,3 +19,4 @@ soundfile
 deepgram-sdk
 python-dotenv
 dashscope
+websocket-client
