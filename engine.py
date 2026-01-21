@@ -84,6 +84,7 @@ class Engines(Enum):
     DASHSCOPE = "DASHSCOPE"
     IFLYREC = "IFLYREC"
     IFLYREC_BATCH = "IFLYREC_BATCH"
+    IFLYREC_IST = "IFLYREC_IST"
 
 
 StreamingEngines = [
@@ -167,6 +168,8 @@ class Engine(object):
             return IflyrecEngine(language=language, no_cache=no_cache)
         elif x is Engines.IFLYREC_BATCH:
             return IflyrecBatchEngine(language=language, no_cache=no_cache)
+        elif x is Engines.IFLYREC_IST:
+            return IflyrecIstEngine(language=language, no_cache=no_cache, **kwargs)
         else:
             raise ValueError(f"Cannot create {cls.__name__} of type `{x}`")
 
@@ -1768,7 +1771,8 @@ class IflyrecEngine(Engine):
                     return
 
                 data = msg.get("data", {})
-                ws_data = data.get("result", {}).get("ws", [])
+                result = data.get("result") or {}
+                ws_data = result.get("ws") or []
 
                 for item in ws_data:
                     for cw in item.get("cw", []):
@@ -2091,7 +2095,8 @@ class IflyrecBatchEngine(Engine):
         body_str = json.dumps(body)
         headers = self._create_ost_auth_headers("/v2/ost/create", body_str)
 
-        response = requests.post(self.CREATE_URL, data=body_str, headers=headers, timeout=30)
+        response = requests.post(
+            self.CREATE_URL, data=body_str, headers=headers, timeout=30)
         if response.status_code != 200:
             raise RuntimeError(
                 f"iFlyRec create task failed: {response.status_code} - {response.text}")
@@ -2117,7 +2122,8 @@ class IflyrecBatchEngine(Engine):
         body_str = json.dumps(body)
         headers = self._create_ost_auth_headers("/v2/ost/query", body_str)
 
-        response = requests.post(self.QUERY_URL, data=body_str, headers=headers, timeout=30)
+        response = requests.post(
+            self.QUERY_URL, data=body_str, headers=headers, timeout=30)
         if response.status_code != 200:
             raise RuntimeError(
                 f"iFlyRec query task failed: {response.status_code} - {response.text}")
@@ -2221,6 +2227,295 @@ class IflyrecBatchEngine(Engine):
 
     def __str__(self) -> str:
         return "iFlyRec Batch"
+
+
+class IflyrecIstEngine(Engine):
+    """iFlyRec IST (International Speech Transcription) engine.
+
+    Supports two model types:
+    - basic: Chinese-English bilingual (ist_hy domain)
+    - llm: Multilingual auto-detect (ist_cbm_mix domain)
+    """
+
+    WS_URL = "wss://ist-api-sg.xf-yun.com/v2/ist"
+    HOST = "ist-api-sg.xf-yun.com"
+    MAX_AUDIO_SECONDS = 18000  # 5 hours
+
+    # Model configurations
+    MODEL_CONFIGS = {
+        "basic": {
+            "domain": "ist_hy",
+            "language": "zh_en",
+            "accent": "mandarin",
+            "cache_ext": ".ist_basic",
+        },
+        "llm": {
+            "domain": "ist_cbm_mix",
+            "language": "mix",
+            "accent": "mandarin",
+            "cache_ext": ".ist_llm",
+        },
+    }
+
+    STATUS_FIRST_FRAME = 0
+    STATUS_CONTINUE_FRAME = 1
+    STATUS_LAST_FRAME = 2
+
+    def __init__(self, language: Languages, no_cache: bool = False, ist_model: str = "basic"):
+        super().__init__(no_cache=no_cache)
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        self._app_id = os.environ.get("IFLYREC_APP_ID")
+        self._api_key = os.environ.get("IFLYREC_API_KEY")
+        self._api_secret = os.environ.get("IFLYREC_API_SECRET")
+
+        if not all([self._app_id, self._api_key, self._api_secret]):
+            raise ValueError(
+                "IFLYREC_APP_ID, IFLYREC_API_KEY, and IFLYREC_API_SECRET must be set in .env file")
+
+        if ist_model not in self.MODEL_CONFIGS:
+            raise ValueError(
+                f"Invalid ist_model: {ist_model}. Must be one of: {list(self.MODEL_CONFIGS.keys())}")
+
+        self._ist_model = ist_model
+        self._config = self.MODEL_CONFIGS[ist_model]
+        self._language = language
+
+    def _create_auth_url(self) -> str:
+        """Create authenticated WebSocket URL with HMAC-SHA256 signature."""
+        import hashlib
+        import hmac
+        from wsgiref.handlers import format_date_time
+        from datetime import datetime
+        from time import mktime
+        from urllib.parse import urlencode
+
+        now = datetime.now()
+        date = format_date_time(mktime(now.timetuple()))
+
+        signature_origin = f"host: {self.HOST}\n"
+        signature_origin += f"date: {date}\n"
+        signature_origin += "GET /v2/ist HTTP/1.1"
+
+        signature_sha = hmac.new(
+            self._api_secret.encode('utf-8'),
+            signature_origin.encode('utf-8'),
+            digestmod=hashlib.sha256
+        ).digest()
+        signature_sha = base64.b64encode(
+            signature_sha).decode(encoding='utf-8')
+
+        authorization_origin = (
+            f'api_key="{self._api_key}", algorithm="hmac-sha256", '
+            f'headers="host date request-line", signature="{signature_sha}"'
+        )
+        authorization = base64.b64encode(
+            authorization_origin.encode('utf-8')).decode(encoding='utf-8')
+
+        params = {
+            "authorization": authorization,
+            "date": date,
+            "host": self.HOST
+        }
+        return f"{self.WS_URL}?{urlencode(params)}"
+
+    def _convert_flac_to_pcm(self, flac_path: str) -> tuple:
+        """Convert FLAC file to 16-bit PCM bytes. Returns (pcm_bytes, sample_rate)."""
+        import numpy as np
+        audio, sample_rate = soundfile.read(flac_path, dtype="int16")
+        if sample_rate not in (8000, 16000):
+            raise ValueError(
+                f"Unsupported sample rate for `{flac_path}`: got {sample_rate}, expected 8000 or 16000")
+        return audio.astype(np.int16).tobytes(), sample_rate
+
+    def transcribe(self, path: str) -> str:
+        import ssl
+        import websocket
+        import threading
+
+        cache_ext = self._config["cache_ext"]
+        cache_path = path.replace(".flac", cache_ext)
+
+        if not self._no_cache and os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                return f.read()
+
+        audio_info = soundfile.info(path)
+        if audio_info.duration > self.MAX_AUDIO_SECONDS:
+            print(f"Warning: Audio file {path} is {audio_info.duration:.1f}s, "
+                  f"exceeds {self.MAX_AUDIO_SECONDS}s limit. Skipping.")
+            return ""
+
+        pcm_data, sample_rate = self._convert_flac_to_pcm(path)
+        audio_format = f"audio/L16;rate={sample_rate}"
+        ws_url = self._create_auth_url()
+
+        # Use WebSocketApp with callbacks for concurrent send/receive
+        result_parts = []
+        error_info = {"code": None, "message": None}
+        done_event = threading.Event()
+
+        # Frame size and interval per official iFlytek spec
+        frame_size = 1280  # 1280 bytes per frame (40ms of 16kHz 16-bit audio)
+        interval = 0.04  # 40ms between frames
+
+        config = self._config
+
+        def on_message(ws, message):
+            try:
+                msg = json.loads(message)
+                code = msg.get("code", 0)
+                if code != 0:
+                    error_info["code"] = code
+                    error_info["message"] = msg.get("message", "Unknown error")
+                    done_event.set()
+                    return
+
+                data = msg.get("data", {})
+                result = data.get("result") or {}
+                ws_data = result.get("ws") or []
+
+                for item in ws_data:
+                    for cw in item.get("cw", []):
+                        word = cw.get("w", "")
+                        if word:
+                            result_parts.append(word)
+
+                if data.get("status") == 2:
+                    done_event.set()
+            except Exception as e:
+                error_info["code"] = -1
+                error_info["message"] = str(e)
+                done_event.set()
+
+        def on_error(ws, error):
+            error_info["code"] = -1
+            error_info["message"] = str(error)
+            done_event.set()
+
+        def on_close(ws, close_status_code, close_msg):
+            done_event.set()
+
+        def on_open(ws):
+            def send_audio():
+                try:
+                    offset = 0
+                    total_len = len(pcm_data)
+                    status = self.STATUS_FIRST_FRAME
+
+                    while offset < total_len:
+                        chunk = pcm_data[offset:offset + frame_size]
+                        if not chunk:
+                            status = self.STATUS_LAST_FRAME
+                        audio_b64 = base64.b64encode(chunk).decode('utf-8')
+
+                        if status == self.STATUS_FIRST_FRAME:
+                            frame_data = {
+                                "common": {"app_id": self._app_id},
+                                "business": {
+                                    "domain": config["domain"],
+                                    "language": config["language"],
+                                    "accent": config["accent"],
+                                },
+                                "data": {
+                                    "status": 0,
+                                    "format": audio_format,
+                                    "audio": audio_b64,
+                                    "encoding": "raw"
+                                }
+                            }
+                            status = self.STATUS_CONTINUE_FRAME
+                        elif status == self.STATUS_CONTINUE_FRAME:
+                            frame_data = {
+                                "data": {
+                                    "status": 1,
+                                    "format": audio_format,
+                                    "audio": audio_b64,
+                                    "encoding": "raw"
+                                }
+                            }
+                        else:  # STATUS_LAST_FRAME
+                            frame_data = {
+                                "data": {
+                                    "status": 2,
+                                    "format": audio_format,
+                                    "audio": audio_b64,
+                                    "encoding": "raw"
+                                }
+                            }
+
+                        ws.send(json.dumps(frame_data))
+                        offset += frame_size
+
+                        # Check if this was the last chunk
+                        if offset >= total_len:
+                            # Send final frame with status 2
+                            if status != self.STATUS_LAST_FRAME:
+                                final_frame = {
+                                    "data": {
+                                        "status": 2,
+                                        "format": audio_format,
+                                        "audio": "",
+                                        "encoding": "raw"
+                                    }
+                                }
+                                ws.send(json.dumps(final_frame))
+                            break
+
+                        # 40ms interval between frames per iFlytek spec
+                        time.sleep(interval)
+
+                except Exception as e:
+                    error_info["code"] = -1
+                    error_info["message"] = f"Send error: {e}"
+                    done_event.set()
+
+            # Start sender thread
+            threading.Thread(target=send_audio, daemon=True).start()
+
+        ws = websocket.WebSocketApp(
+            ws_url,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close,
+            on_open=on_open
+        )
+
+        # Run WebSocket in a separate thread with timeout
+        ws_thread = threading.Thread(
+            target=lambda: ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE}),
+            daemon=True
+        )
+        ws_thread.start()
+
+        # Wait for completion with timeout (generous for long audio)
+        timeout = max(120, audio_info.duration * 2)
+        done_event.wait(timeout=timeout)
+        ws.close()
+
+        if error_info["code"] is not None:
+            raise RuntimeError(
+                f"iFlyRec IST API error {error_info['code']}: {error_info['message']}")
+
+        result = "".join(result_parts)
+
+        with open(cache_path, "w") as f:
+            f.write(result)
+
+        return result
+
+    def audio_sec(self) -> float:
+        return -1.0
+
+    def process_sec(self) -> float:
+        return -1.0
+
+    def delete(self) -> None:
+        pass
+
+    def __str__(self) -> str:
+        return f"iFlyRec IST ({self._ist_model})"
 
 
 __all__ = [

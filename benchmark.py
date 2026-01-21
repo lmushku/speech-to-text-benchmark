@@ -126,6 +126,8 @@ def main():
     parser.add_argument("--deepgram-api-key")
     parser.add_argument("--elevenlabs-api-key")
     parser.add_argument("--dashscope-api-key")
+    parser.add_argument("--iflyrec-ist-model", choices=["basic", "llm"], default="basic",
+                        help="IST model type: basic (Chinese-English bilingual) or llm (multilingual)")
     parser.add_argument("--num-examples", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=os.cpu_count())
     parser.add_argument("--no-cache", action="store_true",
@@ -207,6 +209,9 @@ def main():
     elif engine_name == Engines.IFLYREC:
         # Credentials are loaded from .env file via dotenv in the engine class
         pass
+    elif engine_name == Engines.IFLYREC_IST:
+        # Credentials are loaded from .env file via dotenv in the engine class
+        engine_params["ist_model"] = args.iflyrec_ist_model
 
     if engine_name in StreamingEngines and engine_name not in [Engines.PICOVOICE_CHEETAH, Engines.PICOVOICE_CHEETAH_FAST]:
         engine_params["chunk_size_ms"] = args.streaming_chunk_size_ms
