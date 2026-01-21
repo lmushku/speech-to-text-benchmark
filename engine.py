@@ -83,6 +83,7 @@ class Engines(Enum):
     ELEVENLABS = "ELEVENLABS"
     DASHSCOPE = "DASHSCOPE"
     IFLYREC = "IFLYREC"
+    IFLYREC_BATCH = "IFLYREC_BATCH"
 
 
 StreamingEngines = [
@@ -164,6 +165,8 @@ class Engine(object):
             return DashscopeEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.IFLYREC:
             return IflyrecEngine(language=language, no_cache=no_cache)
+        elif x is Engines.IFLYREC_BATCH:
+            return IflyrecBatchEngine(language=language, no_cache=no_cache)
         else:
             raise ValueError(f"Cannot create {cls.__name__} of type `{x}`")
 
@@ -1806,7 +1809,7 @@ class IflyrecEngine(Engine):
                                 "common": {"app_id": self._app_id},
                                 "business": {
                                     "domain": "iat",
-                                    "language": self._language,
+                                    "language": "mq_cbm",
                                     "accent": self._accent,
                                     "vad_eos": 10000,
                                     "ptt": 1,
@@ -1908,6 +1911,316 @@ class IflyrecEngine(Engine):
 
     def __str__(self) -> str:
         return "iFlyRec"
+
+
+class IflyrecBatchEngine(Engine):
+    """iFlyRec Global Speed Transcription (OST) engine for batch processing.
+
+    Supports long audio files (up to 5 hours) with Chinese-English codeswitching.
+    Uses HTTP-based upload → create task → poll for results workflow.
+    """
+
+    UPLOAD_HOST = "sgw-gp.xf-yun.com"
+    UPLOAD_URL = "https://sgw-gp.xf-yun.com/api/v1/spost"
+    OST_HOST = "ost-api-sg.xf-yun.com"
+    CREATE_URL = "https://ost-api-sg.xf-yun.com/v2/ost/create"
+    QUERY_URL = "https://ost-api-sg.xf-yun.com/v2/ost/query"
+
+    # Task types for different languages
+    # Chinese task type supports Chinese-English codeswitching by default
+    LANGUAGE_TO_TASK_TYPE = {
+        Languages.ZH: "iflyrec_voice_cn_10m_ed",
+    }
+
+    POLL_INTERVAL = 5  # seconds between status checks
+    MAX_POLL_TIME = 3600  # max 1 hour for very long files
+
+    def __init__(self, language: Languages, no_cache: bool = False):
+        super().__init__(no_cache=no_cache)
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        self._app_id = os.environ.get("IFLYREC_APP_ID")
+        self._api_key = os.environ.get("IFLYREC_API_KEY")
+        self._api_secret = os.environ.get("IFLYREC_API_SECRET")
+
+        if not all([self._app_id, self._api_key, self._api_secret]):
+            raise ValueError(
+                "IFLYREC_APP_ID, IFLYREC_API_KEY, and IFLYREC_API_SECRET must be set in .env file")
+
+        if language not in self.LANGUAGE_TO_TASK_TYPE:
+            raise ValueError(
+                f"IFLYREC_BATCH engine does not support language: {language}. "
+                f"Supported: {list(self.LANGUAGE_TO_TASK_TYPE.keys())}")
+
+        self._language = language
+        self._task_type = self.LANGUAGE_TO_TASK_TYPE[language]
+
+    def _create_upload_auth_headers(self, url: str, body: bytes) -> dict:
+        """Create authentication headers for file upload endpoint."""
+        import hashlib
+        import hmac
+        from wsgiref.handlers import format_date_time
+        from datetime import datetime
+        from time import mktime
+        from urllib.parse import urlparse
+
+        # Body digest
+        body_digest = hashlib.sha256(body).digest()
+        body_sign = "SHA256=" + base64.b64encode(body_digest).decode('utf-8')
+
+        # Parse URL
+        u = urlparse(url)
+        host = u.hostname
+
+        # Date
+        now = datetime.now()
+        date = format_date_time(mktime(now.timetuple()))
+
+        # Signature string
+        request_line = f"POST {u.path} HTTP/1.1"
+        sign_str = f"host: {host}\ndate: {date}\n{request_line}\ndigest: {body_sign}"
+
+        # HMAC signature
+        signature = hmac.new(
+            self._api_secret.encode('utf-8'),
+            sign_str.encode('utf-8'),
+            hashlib.sha256
+        ).digest()
+        signature_b64 = base64.b64encode(signature).decode('utf-8')
+
+        authorization = (
+            f'api_key="{self._api_key}", algorithm="hmac-sha256", '
+            f'headers="host date request-line digest", signature="{signature_b64}"'
+        )
+
+        return {
+            "host": host,
+            "date": date,
+            "authorization": authorization,
+            "digest": body_sign,
+            "Content-Length": str(len(body)),
+            "X-TTL": "100",
+        }
+
+    def _create_ost_auth_headers(self, uri: str, body: str) -> dict:
+        """Create authentication headers for OST create/query endpoints."""
+        import hashlib
+        import hmac
+        from wsgiref.handlers import format_date_time
+        from datetime import datetime
+        from time import mktime
+
+        # Body digest (SHA-256)
+        body_bytes = body.encode('utf-8')
+        body_hash = hashlib.sha256(body_bytes).digest()
+        digest = "SHA-256=" + base64.b64encode(body_hash).decode('utf-8')
+
+        # Date
+        now = datetime.now()
+        date = format_date_time(mktime(now.timetuple()))
+
+        # Signature string
+        sign_str = f"host: {self.OST_HOST}\ndate: {date}\nPOST {uri} HTTP/1.1\ndigest: {digest}"
+
+        # HMAC signature
+        signature = hmac.new(
+            self._api_secret.encode('utf-8'),
+            sign_str.encode('utf-8'),
+            hashlib.sha256
+        ).digest()
+        signature_b64 = base64.b64encode(signature).decode('utf-8')
+
+        authorization = (
+            f'api_key="{self._api_key}", algorithm="hmac-sha256", '
+            f'headers="host date request-line digest", signature="{signature_b64}"'
+        )
+
+        return {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Host": self.OST_HOST,
+            "Date": date,
+            "Digest": digest,
+            "Authorization": authorization,
+        }
+
+    def _upload_file(self, path: str) -> str:
+        """Upload audio file and return the file URL."""
+        with open(path, 'rb') as f:
+            body = f.read()
+
+        url = f"{self.UPLOAD_URL}?get_link=true&link_ttl=3600&split_host=true"
+        headers = self._create_upload_auth_headers(url, body)
+
+        response = requests.post(url, data=body, headers=headers, timeout=300)
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"iFlyRec file upload failed: {response.status_code} - {response.text}")
+
+        data = response.json()
+        link_path = data.get("data", {}).get("link_path")
+        if not link_path:
+            raise RuntimeError(
+                f"iFlyRec file upload response missing link_path: {data}")
+
+        return f"https://sgw-gp.xf-yun.com{link_path}"
+
+    def _create_task(self, file_url: str, sample_rate: int) -> str:
+        """Create transcription task and return task_id."""
+        # Determine audio format based on sample rate
+        audio_format = f"audio/L16;rate={sample_rate}"
+
+        body = {
+            "common": {"app_id": self._app_id},
+            "business": {
+                "task_type": self._task_type,
+                "request_id": str(uuid.uuid4()),
+                "pd": "edu",
+                "vspp_on": 1,
+                "smoothproc": True,
+                "colloqproc": False,
+            },
+            "data": {
+                "audio_src": "http",
+                "audio_url": file_url,
+                "format": audio_format,
+                "encoding": "raw"
+            }
+        }
+        body_str = json.dumps(body)
+        headers = self._create_ost_auth_headers("/v2/ost/create", body_str)
+
+        response = requests.post(self.CREATE_URL, data=body_str, headers=headers, timeout=30)
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"iFlyRec create task failed: {response.status_code} - {response.text}")
+
+        data = response.json()
+        if data.get("code") != 0:
+            raise RuntimeError(
+                f"iFlyRec create task error: {data.get('message', 'Unknown error')}")
+
+        task_id = data.get("data", {}).get("task_id")
+        if not task_id:
+            raise RuntimeError(
+                f"iFlyRec create task response missing task_id: {data}")
+
+        return task_id
+
+    def _query_task(self, task_id: str) -> dict:
+        """Query task status and return response data."""
+        body = {
+            "common": {"app_id": self._app_id},
+            "business": {"task_id": task_id},
+        }
+        body_str = json.dumps(body)
+        headers = self._create_ost_auth_headers("/v2/ost/query", body_str)
+
+        response = requests.post(self.QUERY_URL, data=body_str, headers=headers, timeout=30)
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"iFlyRec query task failed: {response.status_code} - {response.text}")
+
+        return response.json()
+
+    def _extract_transcript(self, result: dict) -> str:
+        """Extract transcript text from OST result structure."""
+        text_parts = []
+
+        lattice = result.get("data", {}).get("result", {}).get("lattice", [])
+        for item in lattice:
+            json_1best = item.get("json_1best", {})
+            st = json_1best.get("st", {})
+            for rt in st.get("rt", []):
+                for ws in rt.get("ws", []):
+                    for cw in ws.get("cw", []):
+                        word = cw.get("w", "")
+                        if word:
+                            text_parts.append(word)
+
+        return "".join(text_parts)
+
+    def _convert_to_pcm(self, path: str) -> tuple:
+        """Convert audio file to 16-bit PCM and return (pcm_path, sample_rate).
+
+        The OST API expects raw PCM data, so we convert the input file.
+        Returns a tuple of (temporary_pcm_path, sample_rate).
+        """
+        import tempfile
+        import numpy as np
+
+        audio, sample_rate = soundfile.read(path, dtype="int16")
+
+        # Create temp file for PCM data
+        fd, pcm_path = tempfile.mkstemp(suffix=".pcm")
+        os.close(fd)
+
+        audio.astype(np.int16).tofile(pcm_path)
+
+        return pcm_path, sample_rate
+
+    def transcribe(self, path: str) -> str:
+        cache_ext = ".iflybatch"
+        cache_path = os.path.splitext(path)[0] + cache_ext
+
+        if not self._no_cache and os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                return f.read()
+
+        # Convert audio to PCM format
+        pcm_path, sample_rate = self._convert_to_pcm(path)
+
+        try:
+            # Upload file
+            file_url = self._upload_file(pcm_path)
+
+            # Create transcription task
+            task_id = self._create_task(file_url, sample_rate)
+
+            # Poll for completion
+            start_time = time.time()
+            while time.time() - start_time < self.MAX_POLL_TIME:
+                result = self._query_task(task_id)
+
+                if result.get("code") != 0:
+                    raise RuntimeError(
+                        f"iFlyRec query error: {result.get('message', 'Unknown error')}")
+
+                task_status = result.get("data", {}).get("task_status")
+
+                # Status: '1' = processing, '2' = queued, other values = complete
+                # Success is determined by code=0, not by task_status value
+                if task_status not in ('1', '2'):
+                    break
+
+                time.sleep(self.POLL_INTERVAL)
+
+            # Extract transcript
+            transcript = self._extract_transcript(result)
+
+        finally:
+            # Clean up temp PCM file
+            if os.path.exists(pcm_path):
+                os.remove(pcm_path)
+
+        # Cache result
+        with open(cache_path, "w") as f:
+            f.write(transcript)
+
+        return transcript
+
+    def audio_sec(self) -> float:
+        return -1.0
+
+    def process_sec(self) -> float:
+        return -1.0
+
+    def delete(self) -> None:
+        pass
+
+    def __str__(self) -> str:
+        return "iFlyRec Batch"
 
 
 __all__ = [
