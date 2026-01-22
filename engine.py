@@ -6,6 +6,7 @@ import time
 import uuid
 import warnings
 from enum import Enum
+import threading
 from threading import Event
 from typing import (
     Any,
@@ -85,6 +86,7 @@ class Engines(Enum):
     IFLYREC = "IFLYREC"
     IFLYREC_BATCH = "IFLYREC_BATCH"
     IFLYREC_IST = "IFLYREC_IST"
+    SONIOX_REALTIME = "SONIOX_REALTIME"
 
 
 StreamingEngines = [
@@ -94,6 +96,7 @@ StreamingEngines = [
     Engines.GOOGLE_SPEECH_TO_TEXT_ENHANCED_STREAMING,
     Engines.PICOVOICE_CHEETAH,
     Engines.PICOVOICE_CHEETAH_FAST,
+    Engines.SONIOX_REALTIME,
 ]
 
 
@@ -158,6 +161,8 @@ class Engine(object):
             return IBMWatsonSpeechToTextEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.SONIOX:
             return SonioxAsyncEngine(language=language, no_cache=no_cache, **kwargs)
+        elif x is Engines.SONIOX_REALTIME:
+            return SonioxRealtimeEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.DEEPGRAM:
             return DeepgramEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.ELEVENLABS:
@@ -1451,6 +1456,183 @@ class SonioxAsyncEngine(Engine):
 
     def __str__(self) -> str:
         return "Soniox"
+
+
+class SonioxRealtimeEngine(StreamingEngine):
+    SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
+    MODEL = "stt-rt-v3"
+
+    def __init__(
+        self,
+        language: Languages,
+        chunk_size_ms: int = 120,
+        apply_delay: bool = False,
+        ignore_punctuation: bool = False,
+        no_cache: bool = False,
+    ) -> None:
+        super().__init__(no_cache=no_cache)
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        self._api_key = os.environ.get("SONIOX_API_KEY")
+        if not self._api_key:
+            raise ValueError("SONIOX_API_KEY must be set in .env file")
+
+        self._language_code = SonioxAsyncEngine.LANGUAGE_TO_SONIOX_CODE[language]
+        self._chunk_size_ms = chunk_size_ms
+        self._apply_delay = apply_delay
+        self._ignore_punctuation = ignore_punctuation
+
+    @property
+    def is_async(self) -> bool:
+        return False
+
+    def get_chunk_size_ms(self) -> int:
+        return self._chunk_size_ms
+
+    def load_pcm(self, path: str) -> ByteString:
+        import numpy as np
+        from scipy import signal
+
+        pcm, sample_rate = soundfile.read(path, dtype="int16")
+        if sample_rate != SAMPLE_RATE:
+            num_samples = int(len(pcm) * SAMPLE_RATE / sample_rate)
+            pcm = signal.resample(pcm, num_samples).astype(np.int16)
+        return pcm.tobytes()
+
+    def _measure_word_latency(
+        self, path: str, alignments: Optional[Sequence[Tuple[float, float]]]
+    ) -> WordLatencyOutputType:
+        from websockets.sync.client import connect
+        from websockets import ConnectionClosedOK
+
+        cache_path = path.replace(".flac", ".snxrt")
+
+        if not self._no_cache and alignments is None and os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                res = f.read()
+            return res.split(), [], []
+
+        pcm = self.load_pcm(path)
+        chunk_size_bytes = self.get_chunk_size_bytes()
+
+        send_timings = []
+        if alignments is not None:
+            word_end_times = [aln[-1] for aln in alignments]
+        else:
+            word_end_times = []
+
+        final_tokens_text = []  # Raw token texts with spacing for proper transcript
+        emitted_words = []      # Individual words for latency tracking
+        receive_timings = []
+        streaming_done = threading.Event()
+        error_message = None
+
+        def stream_audio(ws) -> None:
+            nonlocal error_message
+            try:
+                total_bytes = len(pcm)
+                current_byte = 0
+                current_audio_time = 0.0
+                chunk_duration_sec = self._chunk_size_ms / 1000.0
+
+                while current_byte < total_bytes:
+                    chunk = pcm[current_byte: current_byte + chunk_size_bytes]
+                    chunk_end_time = current_audio_time + chunk_duration_sec
+
+                    send_time = time.time()
+                    ws.send(chunk)
+
+                    for word_time in word_end_times:
+                        if current_audio_time < word_time <= chunk_end_time:
+                            send_timings.append(send_time)
+
+                    time.sleep(chunk_duration_sec)
+
+                    current_audio_time = chunk_end_time
+                    current_byte += chunk_size_bytes
+
+                ws.send("")
+            except Exception as e:
+                error_message = str(e)
+            finally:
+                streaming_done.set()
+
+        # Include English as secondary language for Chinese (code-switching support)
+        if self._language_code == "zh":
+            language_hints = ["zh", "en"]
+        else:
+            language_hints = [self._language_code]
+
+        config = {
+            "api_key": self._api_key,
+            "model": self.MODEL,
+            "language_hints": language_hints,
+            "audio_format": "pcm_s16le",
+            "sample_rate": SAMPLE_RATE,
+            "num_channels": 1,
+        }
+
+        with connect(self.SONIOX_WEBSOCKET_URL) as ws:
+            ws.send(json.dumps(config))
+
+            audio_thread = threading.Thread(
+                target=stream_audio,
+                args=(ws,),
+                daemon=True,
+            )
+            audio_thread.start()
+
+            try:
+                while True:
+                    message = ws.recv()
+                    res = json.loads(message)
+
+                    if res.get("error_code") is not None:
+                        raise RuntimeError(
+                            f"Soniox error: {res['error_code']} - {res.get('error_message', 'Unknown error')}")
+
+                    receive_time = time.time()
+                    for token in res.get("tokens", []):
+                        if token.get("is_final"):
+                            raw_text = token.get("text", "")
+                            final_tokens_text.append(raw_text)
+
+                            # Extract words for latency tracking
+                            stripped = raw_text.strip()
+                            if stripped:
+                                words = stripped.split()
+                                emitted_words.extend(words)
+                                receive_timings.extend([receive_time] * len(words))
+
+                    if res.get("finished"):
+                        break
+
+            except ConnectionClosedOK:
+                pass
+
+            audio_thread.join(timeout=5.0)
+
+        if error_message:
+            raise RuntimeError(f"Soniox streaming error: {error_message}")
+
+        if alignments is None:
+            with open(cache_path, "w") as f:
+                f.write("".join(final_tokens_text).strip())
+
+        return emitted_words, receive_timings, send_timings
+
+    def audio_sec(self) -> float:
+        return -1.0
+
+    def process_sec(self) -> float:
+        return -1.0
+
+    def delete(self) -> None:
+        pass
+
+    def __str__(self) -> str:
+        return "Soniox Real-time"
 
 
 class DeepgramEngine(Engine):
