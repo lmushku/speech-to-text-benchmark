@@ -1409,7 +1409,7 @@ class SonioxAsyncEngine(Engine):
         return text
 
     def transcribe(self, path: str) -> str:
-        cache_path = path.replace(".flac", ".snx")
+        cache_path = os.path.splitext(path)[0] + ".snx"
 
         if not self._no_cache and os.path.exists(cache_path):
             with open(cache_path, "r") as f:
@@ -1506,7 +1506,7 @@ class SonioxRealtimeEngine(StreamingEngine):
         from websockets.sync.client import connect
         from websockets import ConnectionClosedOK
 
-        cache_path = path.replace(".flac", ".snxrt")
+        cache_path = os.path.splitext(path)[0] + ".snxrt"
 
         if not self._no_cache and alignments is None and os.path.exists(cache_path):
             with open(cache_path, "r") as f:
