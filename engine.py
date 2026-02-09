@@ -83,6 +83,7 @@ class Engines(Enum):
     DEEPGRAM = "DEEPGRAM"
     ELEVENLABS = "ELEVENLABS"
     DASHSCOPE = "DASHSCOPE"
+    DASHSCOPE_REALTIME = "DASHSCOPE_REALTIME"
     IFLYREC = "IFLYREC"
     IFLYREC_BATCH = "IFLYREC_BATCH"
     IFLYREC_IST = "IFLYREC_IST"
@@ -97,6 +98,7 @@ StreamingEngines = [
     Engines.PICOVOICE_CHEETAH,
     Engines.PICOVOICE_CHEETAH_FAST,
     Engines.SONIOX_REALTIME,
+    Engines.DASHSCOPE_REALTIME,
 ]
 
 
@@ -169,6 +171,8 @@ class Engine(object):
             return ElevenLabsEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.DASHSCOPE:
             return DashscopeEngine(language=language, no_cache=no_cache, **kwargs)
+        elif x is Engines.DASHSCOPE_REALTIME:
+            return DashscopeRealtimeEngine(language=language, no_cache=no_cache, **kwargs)
         elif x is Engines.IFLYREC:
             return IflyrecEngine(language=language, no_cache=no_cache)
         elif x is Engines.IFLYREC_BATCH:
@@ -1460,7 +1464,7 @@ class SonioxAsyncEngine(Engine):
 
 class SonioxRealtimeEngine(StreamingEngine):
     SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
-    MODEL = "stt-rt-v3"
+    MODEL = "stt-rt-v4"
 
     def __init__(
         self,
@@ -1506,7 +1510,7 @@ class SonioxRealtimeEngine(StreamingEngine):
         from websockets.sync.client import connect
         from websockets import ConnectionClosedOK
 
-        cache_path = os.path.splitext(path)[0] + ".snxrt"
+        cache_path = os.path.splitext(path)[0] + ".snxrt_v4"
 
         if not self._no_cache and alignments is None and os.path.exists(cache_path):
             with open(cache_path, "r") as f:
@@ -1603,7 +1607,8 @@ class SonioxRealtimeEngine(StreamingEngine):
                             if stripped:
                                 words = stripped.split()
                                 emitted_words.extend(words)
-                                receive_timings.extend([receive_time] * len(words))
+                                receive_timings.extend(
+                                    [receive_time] * len(words))
 
                     if res.get("finished"):
                         break
@@ -1828,6 +1833,230 @@ class DashscopeEngine(Engine):
 
     def __str__(self) -> str:
         return "Dashscope"
+
+
+class DashscopeRealtimeEngine(StreamingEngine):
+    """Dashscope Qwen3-ASR realtime streaming engine using WebSocket."""
+
+    WEBSOCKET_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    MODEL = "qwen3-asr-flash-realtime"
+
+    LANGUAGE_TO_DASHSCOPE_CODE = {
+        Languages.EN: "en",
+        Languages.DE: "de",
+        Languages.ES: "es",
+        Languages.FR: "fr",
+        Languages.IT: "it",
+        Languages.PT_PT: "pt",
+        Languages.PT_BR: "pt",
+        Languages.ZH: "zh",
+    }
+
+    def __init__(
+        self,
+        language: Languages,
+        chunk_size_ms: int = 120,
+        apply_delay: bool = False,
+        ignore_punctuation: bool = False,
+        no_cache: bool = False,
+    ) -> None:
+        super().__init__(no_cache=no_cache)
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        self._api_key = os.environ.get("DASHSCOPE_API_KEY")
+        if not self._api_key:
+            raise ValueError("DASHSCOPE_API_KEY must be set in .env file")
+
+        self._language = language
+        self._language_code = self.LANGUAGE_TO_DASHSCOPE_CODE[language]
+        self._chunk_size_ms = chunk_size_ms
+        self._apply_delay = apply_delay
+        self._ignore_punctuation = ignore_punctuation
+
+    @property
+    def is_async(self) -> bool:
+        return False
+
+    def get_chunk_size_ms(self) -> int:
+        return self._chunk_size_ms
+
+    def load_pcm(self, path: str) -> ByteString:
+        import numpy as np
+        from scipy import signal
+
+        pcm, sample_rate = soundfile.read(path, dtype="int16")
+        if sample_rate != SAMPLE_RATE:
+            num_samples = int(len(pcm) * SAMPLE_RATE / sample_rate)
+            pcm = signal.resample(pcm, num_samples).astype(np.int16)
+        return pcm.tobytes()
+
+    def _measure_word_latency(
+        self, path: str, alignments: Optional[Sequence[Tuple[float, float]]]
+    ) -> WordLatencyOutputType:
+        from websockets.sync.client import connect
+        from websockets import ConnectionClosedOK
+
+        cache_path = os.path.splitext(path)[0] + ".dsrt"
+
+        if not self._no_cache and alignments is None and os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                res = f.read()
+            return res.split(), [], []
+
+        pcm = self.load_pcm(path)
+        chunk_size_bytes = self.get_chunk_size_bytes()
+
+        send_timings = []
+        if alignments is not None:
+            word_end_times = [aln[-1] for aln in alignments]
+        else:
+            word_end_times = []
+
+        emitted_words = []
+        receive_timings = []
+        streaming_done = threading.Event()
+        error_message = None
+        final_transcript_parts = []
+
+        def stream_audio(ws) -> None:
+            nonlocal error_message
+            try:
+                total_bytes = len(pcm)
+                current_byte = 0
+                current_audio_time = 0.0
+                chunk_duration_sec = self._chunk_size_ms / 1000.0
+
+                while current_byte < total_bytes:
+                    chunk = pcm[current_byte: current_byte + chunk_size_bytes]
+                    chunk_end_time = current_audio_time + chunk_duration_sec
+
+                    audio_b64 = base64.b64encode(chunk).decode('utf-8')
+
+                    send_time = time.time()
+
+                    append_event = {
+                        "event_id": str(uuid.uuid4()),
+                        "type": "input_audio_buffer.append",
+                        "audio": audio_b64
+                    }
+                    ws.send(json.dumps(append_event))
+
+                    for word_time in word_end_times:
+                        if current_audio_time < word_time <= chunk_end_time:
+                            send_timings.append(send_time)
+
+                    if self._apply_delay:
+                        time.sleep(chunk_duration_sec)
+
+                    current_audio_time = chunk_end_time
+                    current_byte += chunk_size_bytes
+
+                commit_event = {
+                    "event_id": str(uuid.uuid4()),
+                    "type": "input_audio_buffer.commit"
+                }
+                ws.send(json.dumps(commit_event))
+
+                # Don't send session.finish here - let transcriptions complete first
+
+            except Exception as e:
+                error_message = str(e)
+            finally:
+                streaming_done.set()
+
+        ws_url = f"{self.WEBSOCKET_URL}?model={self.MODEL}"
+        headers = [("Authorization", f"Bearer {self._api_key}")]
+
+        with connect(ws_url, additional_headers=headers) as ws:
+            session_update = {
+                "event_id": str(uuid.uuid4()),
+                "type": "session.update",
+                "session": {
+                    "input_audio_format": "pcm",
+                    "sample_rate": SAMPLE_RATE,
+                    "input_audio_transcription": {
+                        "language": self._language_code
+                    },
+                    "turn_detection": {
+                        "type": "server_vad"
+                    }
+                }
+            }
+            ws.send(json.dumps(session_update))
+
+            audio_thread = threading.Thread(
+                target=stream_audio,
+                args=(ws,),
+                daemon=True,
+            )
+            audio_thread.start()
+
+            session_finish_sent = False
+
+            try:
+                while True:
+                    # Check if audio streaming is done and we haven't sent finish yet
+                    if streaming_done.is_set() and not session_finish_sent:
+                        # Wait for server to process remaining audio
+                        time.sleep(20.0)
+                        # Now send session.finish
+                        finish_event = {
+                            "event_id": str(uuid.uuid4()),
+                            "type": "session.finish"
+                        }
+                        ws.send(json.dumps(finish_event))
+                        session_finish_sent = True
+
+                    message = ws.recv()
+                    res = json.loads(message)
+
+                    event_type = res.get("type", "")
+
+                    if res.get("error"):
+                        raise RuntimeError(
+                            f"Dashscope error: {res.get('error', {}).get('message', 'Unknown error')}")
+
+                    receive_time = time.time()
+
+                    if event_type == "conversation.item.input_audio_transcription.completed":
+                        transcript = res.get("transcript", "")
+                        if transcript:
+                            final_transcript_parts.append(transcript)
+                            words = transcript.strip().split()
+                            for word in words:
+                                emitted_words.append(word)
+                                receive_timings.append(receive_time)
+
+                    if event_type == "session.finished":
+                        break
+
+            except ConnectionClosedOK:
+                pass
+
+            audio_thread.join(timeout=5.0)
+
+        if error_message:
+            raise RuntimeError(f"Dashscope streaming error: {error_message}")
+
+        if alignments is None:
+            with open(cache_path, "w") as f:
+                # Preserve original transcript format by joining segments with space
+                f.write(" ".join(final_transcript_parts))
+
+        return emitted_words, receive_timings, send_timings
+
+    def audio_sec(self) -> float:
+        return -1.0
+
+    def process_sec(self) -> float:
+        return -1.0
+
+    def delete(self) -> None:
+        pass
+
+    def __str__(self) -> str:
+        return "Dashscope Real-time"
 
 
 class IflyrecEngine(Engine):
